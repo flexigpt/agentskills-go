@@ -1,24 +1,19 @@
 package skilltool
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
-
-	"github.com/flexigpt/llmtools-go"
-	llmtoolsgoSpec "github.com/flexigpt/llmtools-go/spec"
 
 	"github.com/flexigpt/agentskills-go/spec"
+	"github.com/flexigpt/llmtools-go"
+	llmtoolsgoSpec "github.com/flexigpt/llmtools-go/spec"
 )
 
 const (
-	funcIDSkillsLoad      llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/skilltool.Load"
-	funcIDSkillsUnload    llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/skilltool.Unload"
-	funcIDSkillsRead      llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/skilltool.Read"
-	funcIDSkillsRunScript llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/skilltool.RunScript"
+	FuncIDSkillsLoad      llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/skilltool.Load"
+	FuncIDSkillsUnload    llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/skilltool.Unload"
+	FuncIDSkillsRead      llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/skilltool.Read"
+	FuncIDSkillsRunScript llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/skilltool.RunScript"
 )
 
 func Tools() []llmtoolsgoSpec.Tool {
@@ -49,7 +44,7 @@ func SkillsLoadTool() llmtoolsgoSpec.Tool {
 		  "required":["names"],
 		  "additionalProperties":false
 		}`),
-		GoImpl:     llmtoolsgoSpec.GoToolImpl{FuncID: funcIDSkillsLoad},
+		GoImpl:     llmtoolsgoSpec.GoToolImpl{FuncID: FuncIDSkillsLoad},
 		CreatedAt:  llmtoolsgoSpec.SchemaStartTime,
 		ModifiedAt: llmtoolsgoSpec.SchemaStartTime,
 	}
@@ -73,7 +68,7 @@ func SkillsUnloadTool() llmtoolsgoSpec.Tool {
 		  },
 		  "additionalProperties":false
 		}`),
-		GoImpl:     llmtoolsgoSpec.GoToolImpl{FuncID: funcIDSkillsUnload},
+		GoImpl:     llmtoolsgoSpec.GoToolImpl{FuncID: FuncIDSkillsUnload},
 		CreatedAt:  llmtoolsgoSpec.SchemaStartTime,
 		ModifiedAt: llmtoolsgoSpec.SchemaStartTime,
 	}
@@ -99,7 +94,7 @@ func SkillsReadTool() llmtoolsgoSpec.Tool {
 		  "required":["path"],
 		  "additionalProperties":false
 		}`),
-		GoImpl:     llmtoolsgoSpec.GoToolImpl{FuncID: funcIDSkillsRead},
+		GoImpl:     llmtoolsgoSpec.GoToolImpl{FuncID: FuncIDSkillsRead},
 		CreatedAt:  llmtoolsgoSpec.SchemaStartTime,
 		ModifiedAt: llmtoolsgoSpec.SchemaStartTime,
 	}
@@ -127,125 +122,65 @@ func SkillsRunScriptTool() llmtoolsgoSpec.Tool {
 		  "required":["path"],
 		  "additionalProperties":false
 		}`),
-		GoImpl:     llmtoolsgoSpec.GoToolImpl{FuncID: funcIDSkillsRunScript},
+		GoImpl:     llmtoolsgoSpec.GoToolImpl{FuncID: FuncIDSkillsRunScript},
 		CreatedAt:  llmtoolsgoSpec.SchemaStartTime,
 		ModifiedAt: llmtoolsgoSpec.SchemaStartTime,
 	}
 }
 
-func Bind(
-	rt spec.Runtime,
-	sessionID spec.SessionID,
-) (map[llmtoolsgoSpec.FuncID]llmtoolsgoSpec.ToolFunc, error) {
-	if rt == nil {
-		return nil, errors.New("nil runtime")
-	}
-	out := map[llmtoolsgoSpec.FuncID]llmtoolsgoSpec.ToolFunc{}
-
-	out[funcIDSkillsLoad] = func(ctx context.Context, in json.RawMessage) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
-		args, err := decodeStrict[spec.LoadArgs](in)
-		if err != nil {
-			return nil, err
-		}
-		res, err := rt.Load(ctx, sessionID, args)
-		if err != nil {
-			return nil, err
-		}
-		return textJSON(res)
-	}
-
-	out[funcIDSkillsUnload] = func(ctx context.Context, in json.RawMessage) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
-		args, err := decodeStrict[spec.UnloadArgs](in)
-		if err != nil {
-			return nil, err
-		}
-		res, err := rt.Unload(ctx, sessionID, args)
-		if err != nil {
-			return nil, err
-		}
-		return textJSON(res)
-	}
-
-	out[funcIDSkillsRead] = func(ctx context.Context, in json.RawMessage) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
-		args, err := decodeStrict[spec.ReadArgs](in)
-		if err != nil {
-			return nil, err
-		}
-		return rt.Read(ctx, sessionID, args)
-	}
-
-	out[funcIDSkillsRunScript] = func(ctx context.Context, in json.RawMessage) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
-		args, err := decodeStrict[spec.RunScriptArgs](in)
-		if err != nil {
-			return nil, err
-		}
-		res, err := rt.RunScript(ctx, sessionID, args)
-		if err != nil {
-			return nil, err
-		}
-		return textJSON(res)
-	}
-
-	return out, nil
-}
-
+// Register registers the skills runtime tools into an existing llmtools-go Registry.
+// Session binding is done by closure via sessionID.
 func Register(r *llmtools.Registry, rt spec.Runtime, sessionID spec.SessionID) error {
 	if r == nil {
 		return errors.New("nil registry")
 	}
-	bound, err := Bind(rt, sessionID)
-	if err != nil {
+	if rt == nil {
+		return errors.New("nil runtime")
+	}
+
+	// "skills.load" -> typed -> text output (JSON).
+	if err := llmtools.RegisterTypedAsTextTool[spec.LoadArgs, spec.LoadResult](
+		r,
+		SkillsLoadTool(),
+		func(ctx context.Context, args spec.LoadArgs) (spec.LoadResult, error) {
+			return rt.Load(ctx, sessionID, args)
+		},
+	); err != nil {
 		return err
 	}
-	for _, t := range Tools() {
-		fn := bound[t.GoImpl.FuncID]
-		if fn == nil {
-			return fmt.Errorf("missing bound tool func for %s", t.GoImpl.FuncID)
-		}
-		if err := r.RegisterTool(t, fn); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
-func textJSON(v any) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return nil, fmt.Errorf("encode output: %w", err)
-	}
-	s := string(raw)
-	if s == "" || s == "null" {
-		return nil, nil
-	}
-	return []llmtoolsgoSpec.ToolStoreOutputUnion{
-		{
-			Kind: llmtoolsgoSpec.ToolStoreOutputKindText,
-			TextItem: &llmtoolsgoSpec.ToolStoreOutputText{
-				Text: s,
-			},
+	// "skills.unload" -> typed -> text output (JSON).
+	if err := llmtools.RegisterTypedAsTextTool[spec.UnloadArgs, spec.UnloadResult](
+		r,
+		SkillsUnloadTool(),
+		func(ctx context.Context, args spec.UnloadArgs) (spec.UnloadResult, error) {
+			return rt.Unload(ctx, sessionID, args)
 		},
-	}, nil
-}
-
-func decodeStrict[T any](raw json.RawMessage) (T, error) {
-	var zero T
-
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-
-	var v T
-	if err := dec.Decode(&v); err != nil {
-		return zero, fmt.Errorf("invalid input: %w", err)
+	); err != nil {
+		return err
 	}
 
-	// Must be EOF after the first value.
-	var extra any
-	if err := dec.Decode(&extra); err == nil {
-		return zero, errors.New("invalid input: trailing data")
-	} else if !errors.Is(err, io.EOF) {
-		return zero, errors.New("invalid input: trailing data")
+	// "skills.read" -> typed -> outputs.
+	if err := llmtools.RegisterOutputsTool[spec.ReadArgs](
+		r,
+		SkillsReadTool(),
+		func(ctx context.Context, args spec.ReadArgs) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
+			return rt.Read(ctx, sessionID, args)
+		},
+	); err != nil {
+		return err
 	}
 
-	return v, nil
+	// "skills.run_script" -> typed -> text output (JSON).
+	if err := llmtools.RegisterTypedAsTextTool[spec.RunScriptArgs, spec.RunScriptResult](
+		r,
+		SkillsRunScriptTool(),
+		func(ctx context.Context, args spec.RunScriptArgs) (spec.RunScriptResult, error) {
+			return rt.RunScript(ctx, sessionID, args)
+		},
+	); err != nil {
+		return err
+	}
+
+	return nil
 }
