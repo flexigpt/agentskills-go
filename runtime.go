@@ -2,169 +2,664 @@ package agentskills
 
 import (
 	"context"
+	"encoding/xml"
 	"errors"
+	"fmt"
 	"log/slog"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+	"time"
 
+	"github.com/flexigpt/llmtools-go/fstool"
+	"github.com/flexigpt/llmtools-go/shelltool"
 	llmtoolsgoSpec "github.com/flexigpt/llmtools-go/spec"
+
+	"github.com/flexigpt/agentskills-go/skilltool"
+	"github.com/flexigpt/agentskills-go/spec"
+
+	"github.com/flexigpt/agentskills-go/internal/pathutil"
+	"github.com/flexigpt/agentskills-go/internal/promptxml"
+	"github.com/flexigpt/agentskills-go/internal/sessionstore"
+	"github.com/flexigpt/agentskills-go/internal/skill"
 )
 
-// SkillsRuntime holds an in-memory registry of skills loaded from directories.
-// It is safe for concurrent use by multiple goroutines.
-type SkillsRuntime struct {
+// Sanity: avoid unused imports in case we don't use XMLStruct helper.
+var _ = xml.MarshalIndent
+
+type Runtime struct {
+	mu     sync.RWMutex
+	logger *slog.Logger
+
+	// Registry (name -> entry).
+	skills map[string]*skillEntry
+
+	// Sessions (internal state store).
+	sessions *sessionstore.Store
+
 	maxActivePerSession int
-	logger              *slog.Logger
+	shellEnabled        bool
+	shellPolicy         shelltool.ShellCommandPolicy
 }
 
-// Option is a functional option for configuring a Runtime.
-type Option func(*SkillsRuntime) error
-
-// WithMaxActivePerSession sets a soft upper bound on concurrently active
-// skills per SessionState. Zero or negative means "no explicit limit".
-func WithMaxActivePerSession(n int) Option {
-	return func(r *SkillsRuntime) error {
-		r.maxActivePerSession = n
-		return nil
-	}
+type skillEntry struct {
+	mu  sync.RWMutex
+	rec spec.SkillRecord
 }
 
-// WithLogger sets the logger used by the Runtime.
+type Option func(*Runtime) error
+
 func WithLogger(l *slog.Logger) Option {
-	return func(r *SkillsRuntime) error {
+	return func(r *Runtime) error {
 		r.logger = l
 		return nil
 	}
 }
 
-// NewSkillsRuntime constructs an empty Runtime with the given options.
-// No skills are loaded initially; callers add/remove skills explicitly
-// via AddSkillDir/RemoveSkill.
-func NewSkillsRuntime(opts ...Option) (*SkillsRuntime, error) {
-	r := &SkillsRuntime{}
+func WithMaxActivePerSession(n int) Option {
+	return func(r *Runtime) error {
+		r.maxActivePerSession = n
+		return nil
+	}
+}
+
+func WithSessionTTL(ttl time.Duration) Option {
+	return func(r *Runtime) error {
+		r.sessions.SetTTL(ttl)
+		return nil
+	}
+}
+
+func WithMaxSessions(maxSessions int) Option {
+	return func(r *Runtime) error {
+		r.sessions.SetMaxSessions(maxSessions)
+		return nil
+	}
+}
+
+// WithShell enables skills.run_script using llmtools-go shelltool, with the given policy.
+func WithShell(policy shelltool.ShellCommandPolicy) Option {
+	return func(r *Runtime) error {
+		r.shellEnabled = true
+		r.shellPolicy = policy
+		return nil
+	}
+}
+
+func New(opts ...Option) (*Runtime, error) {
+	rt := &Runtime{
+		logger:              slog.Default(),
+		skills:              map[string]*skillEntry{},
+		sessions:            sessionstore.New(),
+		maxActivePerSession: 8, // sensible default (can override)
+		shellEnabled:        false,
+		shellPolicy:         shelltool.DefaultShellCommandPolicy,
+	}
 	for _, o := range opts {
-		if o != nil {
-			e := o(r)
-			if e != nil {
-				return nil, errors.New("invalid skills runtime options")
-			}
+		if o == nil {
+			continue
+		}
+		if err := o(rt); err != nil {
+			return nil, err
 		}
 	}
-	return r, nil
+	if rt.logger == nil {
+		rt.logger = slog.Default()
+	}
+	return rt, nil
 }
 
-// AddSkillDir loads a single skill from the given directory.
-//
-// The directory must contain exactly one SKILL.md file at its root;
-// nested scanning is not performed. Callers that want to discover
-// multiple skills under a tree should locate individual skill dirs
-// themselves and call AddSkillDir once per dir.
-//
-// On success it returns the loaded Skill. If a skill with the same Name
-// already exists, ErrSkillAlreadyExists is returned.
-func (s *SkillsRuntime) AddSkillDir(ctx context.Context, dir string) (Skill, error) {
-	return Skill{}, nil
+func (r *Runtime) NewSession(ctx context.Context) (spec.SessionID, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	s := r.sessions.NewSession()
+	return spec.SessionID(s.ID), nil
 }
 
-// RemoveSkill removes a skill by name from the runtime.
-//
-// If the skill does not exist, ErrSkillNotFound is returned.
-// The removed Skill (if any) is returned for convenience.
-func (s *SkillsRuntime) RemoveSkill(name string) (Skill, error) {
-	return Skill{}, nil
+func (r *Runtime) CloseSession(ctx context.Context, id spec.SessionID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(string(id)) == "" {
+		return nil
+	}
+	r.sessions.Delete(string(id))
+	return nil
 }
 
-// ListSkills returns a snapshot of all skills currently registered in
-// the runtime, sorted by Name.
-func (s *SkillsRuntime) ListSkills() ([]Skill, error) {
-	return []Skill{}, nil
+// Session returns a convenience wrapper bound to a session ID,
+// including tool registration via package /tools.
+func (r *Runtime) Session(id spec.SessionID) *Session {
+	return &Session{rt: r, id: id}
 }
 
-// GetSkill returns the skill with the given name, if present.
-func (s *SkillsRuntime) GetSkill(name string) (Skill, error) {
-	return Skill{}, nil
+func (r *Runtime) AddSkillDir(ctx context.Context, dir string) (spec.SkillRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return spec.SkillRecord{}, err
+	}
+	rec, err := skill.IndexSkillDir(ctx, dir)
+	if err != nil {
+		return spec.SkillRecord{}, errors.Join(spec.ErrInvalidSkillDir, err)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, ok := r.skills[rec.Name]; ok {
+		return spec.SkillRecord{}, spec.ErrSkillAlreadyExists
+	}
+	r.skills[rec.Name] = &skillEntry{rec: rec}
+	return rec, nil
 }
 
-// Load applies a LoadArgs to the given SessionState and returns both the
-// resulting state and a structured description of the active skills.
-//
-// It enforces Runtime-level constraints such as MaxActivePerSession.
-// If any requested skill name does not exist in the Runtime, an error
-// is returned and the SessionState is not changed.
-func (s *SkillsRuntime) Load(
+func (r *Runtime) RemoveSkill(name string) (spec.SkillRecord, error) {
+	n := strings.TrimSpace(name)
+	if n == "" {
+		return spec.SkillRecord{}, spec.ErrSkillNotFound
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	e, ok := r.skills[n]
+	if !ok {
+		return spec.SkillRecord{}, spec.ErrSkillNotFound
+	}
+	delete(r.skills, n)
+
+	e.mu.RLock()
+	rec := e.rec
+	e.mu.RUnlock()
+	return rec, nil
+}
+
+func (r *Runtime) ListSkills() []spec.SkillRecord {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	out := make([]spec.SkillRecord, 0, len(r.skills))
+	for _, e := range r.skills {
+		e.mu.RLock()
+		out = append(out, e.rec)
+		e.mu.RUnlock()
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// AvailableSkillsPromptXML builds <available_skills> XML for system prompts.
+// If includeLocation=false, location elements are omitted (tool-only agents).
+func (r *Runtime) AvailableSkillsPromptXML(includeLocation bool) (string, error) {
+	skills := r.ListSkills()
+	return promptxml.AvailableSkillsXML(skills, includeLocation)
+}
+
+// ActiveSkillsPromptXML builds <active_skills> XML containing active SKILL.md bodies in load order.
+func (r *Runtime) ActiveSkillsPromptXML(ctx context.Context, sessionID spec.SessionID) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
+	sess, err := r.mustGetSession(sessionID)
+	if err != nil {
+		return "", err
+	}
+
+	sess.Mu.Lock()
+	active := append([]string(nil), sess.ActiveSkills...)
+	sess.Mu.Unlock()
+
+	records := make([]spec.SkillRecord, 0, len(active))
+	for _, name := range active {
+		rec, err := r.ensureBodyLoaded(ctx, name)
+		if err != nil {
+			return "", err
+		}
+		records = append(records, rec)
+	}
+	return promptxml.ActiveSkillsXML(records)
+}
+
+// Load implements skills.load behavior.
+// Default mode is "replace" (per spec).
+func (r *Runtime) Load(
 	ctx context.Context,
-	sess SessionState,
-	args LoadArgs,
-) (result LoadResult, newState SessionState, err error) {
-	return LoadResult{}, SessionState{}, nil
+	sessionID spec.SessionID,
+	args spec.LoadArgs,
+) (spec.LoadResult, error) {
+	if err := ctx.Err(); err != nil {
+		return spec.LoadResult{}, err
+	}
+
+	mode := args.Mode
+	if strings.TrimSpace(string(mode)) == "" {
+		mode = spec.LoadModeReplace
+	}
+	if mode != spec.LoadModeReplace && mode != spec.LoadModeAdd {
+		return spec.LoadResult{}, errors.New("mode must be 'replace' or 'add'")
+	}
+	if len(args.Names) == 0 {
+		return spec.LoadResult{}, errors.New("names is required")
+	}
+
+	req := make([]string, 0, len(args.Names))
+	seen := map[string]struct{}{}
+	for _, n := range args.Names {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		req = append(req, n)
+	}
+	if len(req) == 0 {
+		return spec.LoadResult{}, errors.New("names is required")
+	}
+
+	r.mu.RLock()
+	for _, n := range req {
+		if _, ok := r.skills[n]; !ok {
+			r.mu.RUnlock()
+			return spec.LoadResult{}, errors.Join(spec.ErrSkillNotFound, fmt.Errorf("unknown skill: %s", n))
+		}
+	}
+	r.mu.RUnlock()
+
+	sess, err := r.mustGetSession(sessionID)
+	if err != nil {
+		return spec.LoadResult{}, err
+	}
+
+	sess.Mu.Lock()
+	defer sess.Mu.Unlock()
+
+	var next []string
+	switch mode {
+	case spec.LoadModeReplace:
+		next = append([]string(nil), req...)
+	case spec.LoadModeAdd:
+		reqSet := map[string]struct{}{}
+		for _, n := range req {
+			reqSet[n] = struct{}{}
+		}
+		keep := make([]string, 0, len(sess.ActiveSkills))
+		for _, n := range sess.ActiveSkills {
+			if _, isReq := reqSet[n]; !isReq {
+				keep = append(keep, n)
+			}
+		}
+		keep = append(keep, req...)
+		next = slices.Clone(keep)
+	}
+
+	if r.maxActivePerSession > 0 && len(next) > r.maxActivePerSession {
+		return spec.LoadResult{}, fmt.Errorf("too many active skills (%d > %d)", len(next), r.maxActivePerSession)
+	}
+
+	// Cache bodies for prompt injection (progressive disclosure).
+	for _, name := range next {
+		if _, err := r.ensureBodyLoaded(ctx, name); err != nil {
+			return spec.LoadResult{}, err
+		}
+	}
+
+	sess.ActiveSkills = next
+
+	refs := make([]spec.SkillRef, 0, len(next))
+	for _, name := range next {
+		r.mu.RLock()
+		e := r.skills[name]
+		r.mu.RUnlock()
+
+		e.mu.RLock()
+		rec := e.rec
+		e.mu.RUnlock()
+
+		refs = append(refs, spec.SkillRef{
+			Name:       rec.Name,
+			Location:   rec.Location,
+			RootDir:    rec.RootDir,
+			Digest:     rec.Digest,
+			Properties: rec.Properties,
+		})
+	}
+
+	return spec.LoadResult{ActiveSkills: refs}, nil
 }
 
-// Unload applies an UnloadArgs to the given SessionState and returns
-// both the resulting state and an updated description of the active skills.
-//
-// If All is true, all skills are deactivated. If All is false and Names
-// is empty, Unload returns an error.
-func (s *SkillsRuntime) Unload(
+func (r *Runtime) Unload(
 	ctx context.Context,
-	sess SessionState,
-	args UnloadArgs,
-) (result UnloadResult, newState SessionState, err error) {
-	return UnloadResult{}, SessionState{}, nil
+	sessionID spec.SessionID,
+	args spec.UnloadArgs,
+) (spec.UnloadResult, error) {
+	if err := ctx.Err(); err != nil {
+		return spec.UnloadResult{}, err
+	}
+	if !args.All && len(args.Names) == 0 {
+		return spec.UnloadResult{}, errors.New("names is required unless all=true")
+	}
+
+	sess, err := r.mustGetSession(sessionID)
+	if err != nil {
+		return spec.UnloadResult{}, err
+	}
+
+	sess.Mu.Lock()
+	defer sess.Mu.Unlock()
+
+	if args.All {
+		sess.ActiveSkills = nil
+		return spec.UnloadResult{ActiveSkills: nil}, nil
+	}
+
+	rm := map[string]struct{}{}
+	for _, n := range args.Names {
+		n = strings.TrimSpace(n)
+		if n != "" {
+			rm[n] = struct{}{}
+		}
+	}
+
+	next := make([]string, 0, len(sess.ActiveSkills))
+	for _, n := range sess.ActiveSkills {
+		if _, ok := rm[n]; !ok {
+			next = append(next, n)
+		}
+	}
+	sess.ActiveSkills = next
+
+	refs := make([]spec.SkillRef, 0, len(next))
+	for _, name := range next {
+		r.mu.RLock()
+		e := r.skills[name]
+		r.mu.RUnlock()
+		if e == nil {
+			continue
+		}
+		e.mu.RLock()
+		rec := e.rec
+		e.mu.RUnlock()
+
+		refs = append(refs, spec.SkillRef{
+			Name:       rec.Name,
+			Location:   rec.Location,
+			RootDir:    rec.RootDir,
+			Digest:     rec.Digest,
+			Properties: rec.Properties,
+		})
+	}
+
+	return spec.UnloadResult{ActiveSkills: refs}, nil
 }
 
-// ReadFile reads a file or resource from a skill's directory and returns one
-// or more llmspec.ToolStoreOutputUnion values describing the content.
-//
-// The exact behavior (text vs binary, PDF extraction, etc.) is intended
-// to mirror the semantics of fstool.ReadFile.
-//
-// If SkillName is empty, ReadFile requires that sess.Active is non-empty;
-// otherwise ErrNoActiveSkills is returned. If the named skill does not
-// exist in the runtime, or if the path escapes the skill's RootDir,
-// an error is returned.
-func (s *SkillsRuntime) ReadFile(
+func (r *Runtime) Read(
 	ctx context.Context,
-	sess SessionState,
-	args ReadArgs,
+	sessionID spec.SessionID,
+	args spec.ReadArgs,
 ) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
-	return []llmtoolsgoSpec.ToolStoreOutputUnion{}, nil
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(args.Path) == "" {
+		return nil, errors.New("path is required")
+	}
+
+	sess, err := r.mustGetSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	sess.Mu.Lock()
+	active := append([]string(nil), sess.ActiveSkills...)
+	sess.Mu.Unlock()
+
+	if len(active) == 0 {
+		return nil, spec.ErrNoActiveSkills
+	}
+
+	target := strings.TrimSpace(args.Skill)
+	if target == "" {
+		target = active[len(active)-1]
+	} else if !contains(active, target) {
+		// Enforce progressive disclosure: can only read from active skills.
+		return nil, spec.ErrNoActiveSkills
+	}
+
+	r.mu.RLock()
+	e := r.skills[target]
+	r.mu.RUnlock()
+	if e == nil {
+		return nil, spec.ErrSkillNotFound
+	}
+
+	e.mu.RLock()
+	root := e.rec.RootDir
+	e.mu.RUnlock()
+
+	abs, err := pathutil.JoinUnderRoot(root, args.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	enc := strings.TrimSpace(string(args.Encoding))
+	if enc == "" {
+		enc = string(spec.ReadEncodingText)
+	}
+
+	return fstool.ReadFile(ctx, fstool.ReadFileArgs{
+		Path:     abs,
+		Encoding: enc,
+	})
 }
 
-// RunScript executes a script associated with a skill and returns its
-// outputs as llmspec.ToolStoreOutputUnion values (e.g. a text block with
-// stdout/stderr, or a file/image if the script creates artifacts).
-//
-// If the Runtime was not configured with shell execution support,
-// ErrRunScriptUnsupported is returned.
-//
-// As with Read, if SkillName is empty, the most recently active skill
-// is used; ErrNoActiveSkills is returned if there is none. If the named
-// skill does not exist or the script path escapes its RootDir, an error
-// is returned.
-func (s *SkillsRuntime) RunScript(
+func (r *Runtime) RunScript(
 	ctx context.Context,
-	sess SessionState,
-	args RunScriptArgs,
-) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
-	return []llmtoolsgoSpec.ToolStoreOutputUnion{}, nil
+	sessionID spec.SessionID,
+	args spec.RunScriptArgs,
+) (spec.RunScriptResult, error) {
+	if err := ctx.Err(); err != nil {
+		return spec.RunScriptResult{}, err
+	}
+	if !r.shellEnabled {
+		return spec.RunScriptResult{}, spec.ErrRunScriptUnsupported
+	}
+	if strings.TrimSpace(args.Path) == "" {
+		return spec.RunScriptResult{}, errors.New("path is required")
+	}
+
+	sess, err := r.mustGetSession(sessionID)
+	if err != nil {
+		return spec.RunScriptResult{}, err
+	}
+
+	sess.Mu.Lock()
+	active := append([]string(nil), sess.ActiveSkills...)
+	sess.Mu.Unlock()
+
+	if len(active) == 0 {
+		return spec.RunScriptResult{}, spec.ErrNoActiveSkills
+	}
+
+	target := strings.TrimSpace(args.Skill)
+	if target == "" {
+		target = active[len(active)-1]
+	} else if !contains(active, target) {
+		return spec.RunScriptResult{}, spec.ErrNoActiveSkills
+	}
+
+	r.mu.RLock()
+	e := r.skills[target]
+	r.mu.RUnlock()
+	if e == nil {
+		return spec.RunScriptResult{}, spec.ErrSkillNotFound
+	}
+
+	e.mu.RLock()
+	root := e.rec.RootDir
+	e.mu.RUnlock()
+
+	// Enforce scripts/ constraint (relative path must be under scripts/).
+	if !pathutil.RelIsUnderDir(args.Path, "scripts") {
+		return spec.RunScriptResult{}, fmt.Errorf("script path must be under scripts/: %s", args.Path)
+	}
+
+	scriptAbs, err := pathutil.JoinUnderRoot(root, args.Path)
+	if err != nil {
+		return spec.RunScriptResult{}, err
+	}
+
+	workdirRel := strings.TrimSpace(args.Workdir)
+	if workdirRel == "" {
+		workdirRel = "."
+	}
+	workdirAbs, err := pathutil.JoinUnderRoot(root, workdirRel)
+	if err != nil {
+		return spec.RunScriptResult{}, err
+	}
+
+	// Per session+skill shell binding (tool instance + shell session ID).
+	b := sess.ShellBindingForSkill(target)
+	if b.Tool == nil {
+		st, err := shelltool.NewShellTool(
+			shelltool.WithShellAllowedWorkdirRoots([]string{root}),
+			shelltool.WithShellCommandPolicy(r.shellPolicy),
+			// Keep shelltool session store small; we only need one per skill binding.
+			shelltool.WithShellMaxSessions(8),
+			shelltool.WithShellSessionTTL(30*time.Minute),
+		)
+		if err != nil {
+			return spec.RunScriptResult{}, err
+		}
+		b.Tool = st
+	}
+
+	shellName, cmd := buildScriptCommand(scriptAbs, args.Args)
+
+	resp, err := b.Tool.Run(ctx, shelltool.ShellCommandArgs{
+		Commands:  []string{cmd},
+		Workdir:   workdirAbs,
+		Env:       args.Env,
+		Shell:     shellName,
+		SessionID: b.ShellSessionID,
+	})
+	if err != nil {
+		return spec.RunScriptResult{}, err
+	}
+	if resp != nil && strings.TrimSpace(resp.SessionID) != "" {
+		b.ShellSessionID = resp.SessionID
+	}
+
+	// Convert to spec output (single-command).
+	out := spec.RunScriptResult{
+		Path: args.Path,
+	}
+	if resp != nil && len(resp.Results) > 0 {
+		out.ExitCode = resp.Results[0].ExitCode
+		out.Stdout = resp.Results[0].Stdout
+		out.Stderr = resp.Results[0].Stderr
+		out.TimedOut = resp.Results[0].TimedOut
+		out.DurationMS = resp.Results[0].DurationMS
+	}
+	return out, nil
 }
 
-// AvailableSkillsPrompt builds a prompt snippet describing the given
-// skills for use in system messages.
-//
-// If names is nil or empty, all skills in the runtime are included.
-// If any name is unknown, an error is returned.
-//
-// The returned string is intended to be embedded directly into a prompt.
-// The exact format (e.g. XML) is defined by this package and is kept
-// stable across versions.
-func (s *SkillsRuntime) AvailableSkillsPrompt(names []string) (string, error) {
-	return "", nil
+// Tools exposure (wrapper over /tools).
+func (r *Runtime) Tools() []llmtoolsgoSpec.Tool { return skilltool.Tools() }
+
+// AvailableSkillsXMLStruct - if you want to embed XML structs directly.
+func (r *Runtime) AvailableSkillsXMLStruct(includeLocation bool) (any, error) {
+	skills := r.ListSkills()
+	return promptxml.AvailableSkillsStruct(skills, includeLocation), nil
 }
 
-// ActiveSkillsPrompt builds a prompt snippet describing the active skills
-// in the given SessionState. Only skills that are currently registered
-// in the runtime are included; missing names are ignored.
-//
-// The returned string is intended to be embedded directly into a prompt.
-func (s *SkillsRuntime) ActiveSkillsPrompt(sess SessionState) (string, error) {
-	return "", nil
+func (r *Runtime) ensureBodyLoaded(ctx context.Context, name string) (spec.SkillRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return spec.SkillRecord{}, err
+	}
+
+	r.mu.RLock()
+	e := r.skills[name]
+	r.mu.RUnlock()
+	if e == nil {
+		return spec.SkillRecord{}, spec.ErrSkillNotFound
+	}
+
+	e.mu.RLock()
+	rec := e.rec
+	hasBody := strings.TrimSpace(rec.SkillMDBody) != ""
+	loc := rec.Location
+	e.mu.RUnlock()
+
+	if hasBody {
+		return rec, nil
+	}
+
+	body, err := skill.LoadSkillBody(ctx, loc)
+	if err != nil {
+		return spec.SkillRecord{}, err
+	}
+
+	e.mu.Lock()
+	// If another goroutine loaded first, keep it.
+	if strings.TrimSpace(e.rec.SkillMDBody) == "" {
+		e.rec.SkillMDBody = body
+	}
+	rec = e.rec
+	e.mu.Unlock()
+
+	return rec, nil
+}
+
+func (r *Runtime) mustGetSession(id spec.SessionID) (*sessionstore.Session, error) {
+	sid := strings.TrimSpace(string(id))
+	if sid == "" {
+		return nil, spec.ErrSessionNotFound
+	}
+	s, ok := r.sessions.Get(sid)
+	if !ok {
+		return nil, spec.ErrSessionNotFound
+	}
+	return s, nil
+}
+
+func contains(list []string, v string) bool {
+	return slices.Contains(list, v)
+}
+
+// buildScriptCommand chooses a shell and builds a command string that works cross-platform.
+func buildScriptCommand(scriptAbs string, args []string) (shellName shelltool.ShellName, commandString string) {
+	ext := strings.ToLower(filepath.Ext(scriptAbs))
+
+	// Windows: prefer pwsh/powershell if available.
+	if pathutil.IsWindows() {
+		if _, err := exec.LookPath("pwsh"); err == nil {
+			return shelltool.ShellNamePwsh, pathutil.PowerShellInvoke(scriptAbs, args)
+		}
+		if _, err := exec.LookPath("powershell"); err == nil {
+			// Shelltool treats "powershell" as either pwsh or powershell; we force powershell syntax anyway.
+			return shelltool.ShellNamePowershell, pathutil.PowerShellInvoke(scriptAbs, args)
+		}
+		// Fallback to cmd: best-effort for .bat/.cmd.
+		if ext == ".bat" || ext == ".cmd" {
+			return shelltool.ShellNameCmd, pathutil.CmdInvoke(scriptAbs, args)
+		}
+		// If no PowerShell, and not a cmd script, still try cmd direct.
+		return shelltool.ShellNameCmd, pathutil.CmdInvoke(scriptAbs, args)
+	}
+
+	// POSIX:.
+	switch ext {
+	case ".sh":
+		return shelltool.ShellNameSh, pathutil.POSIXInvokeWithInterpreter("sh", scriptAbs, args)
+	default:
+		// Run directly; relies on executable bit/shebang.
+		return shelltool.ShellNameSh, pathutil.POSIXInvoke(scriptAbs, args)
+	}
 }
