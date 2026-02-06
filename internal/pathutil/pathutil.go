@@ -82,17 +82,6 @@ func RelIsUnderDir(rel, underDir string) bool {
 	return parts[0] == underDir
 }
 
-// POSIX quoting: single-quote strategy.
-func posixQuote(s string) string {
-	if s == "" {
-		return "''"
-	}
-	if !strings.ContainsRune(s, '\'') {
-		return "'" + s + "'"
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
 func POSIXInvoke(program string, args []string) string {
 	parts := make([]string, 0, 1+len(args))
 	parts = append(parts, posixQuote(program))
@@ -110,12 +99,6 @@ func POSIXInvokeWithInterpreter(interpreter, scriptAbs string, args []string) st
 		parts = append(parts, posixQuote(a))
 	}
 	return strings.Join(parts, " ")
-}
-
-// PowerShell quoting: single quotes, escape by doubling.
-func psQuote(s string) string {
-	// In PowerShell single-quoted strings escape ' by ''.
-	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
 // PowerShellInvoke uses "&" invocation: & 'C:\path\script.ps1' 'arg1' 'arg2'.
@@ -151,4 +134,21 @@ func cmdQuote(s string) string {
 		return `"` + s + `"`
 	}
 	return s
+}
+
+// PowerShell quoting: single quotes, escape by doubling.
+func psQuote(s string) string {
+	// In PowerShell single-quoted strings escape ' by ''.
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// POSIX quoting: single-quote strategy.
+func posixQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	if !strings.ContainsRune(s, '\'') {
+		return "'" + s + "'"
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

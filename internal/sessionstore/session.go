@@ -9,6 +9,11 @@ import (
 	"github.com/google/uuid"
 )
 
+type ShellBinding struct {
+	Tool           *shelltool.ShellTool
+	ShellSessionID string
+}
+
 type Session struct {
 	ID string
 
@@ -20,11 +25,6 @@ type Session struct {
 	shellBySkill map[string]*ShellBinding
 
 	closed bool
-}
-
-type ShellBinding struct {
-	Tool           *shelltool.ShellTool
-	ShellSessionID string
 }
 
 func (s *Session) ShellBindingForSkill(name string) *ShellBinding {

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flexigpt/llmtools-go"
 	"github.com/flexigpt/llmtools-go/fstool"
 	"github.com/flexigpt/llmtools-go/shelltool"
 	llmtoolsgoSpec "github.com/flexigpt/llmtools-go/spec"
@@ -30,6 +31,11 @@ import (
 // Sanity: avoid unused imports in case we don't use XMLStruct helper.
 var _ = xml.MarshalIndent
 
+type skillEntry struct {
+	mu  sync.RWMutex
+	rec spec.SkillRecord
+}
+
 type Runtime struct {
 	mu     sync.RWMutex
 	logger *slog.Logger
@@ -43,11 +49,6 @@ type Runtime struct {
 	maxActivePerSession int
 	shellEnabled        bool
 	shellPolicy         shelltool.ShellCommandPolicy
-}
-
-type skillEntry struct {
-	mu  sync.RWMutex
-	rec spec.SkillRecord
 }
 
 type Option func(*Runtime) error
@@ -87,6 +88,40 @@ func WithShell(policy shelltool.ShellCommandPolicy) Option {
 		r.shellPolicy = policy
 		return nil
 	}
+}
+
+type Session struct {
+	rt *Runtime
+	id spec.SessionID
+}
+
+func (s *Session) ID() spec.SessionID { return s.id }
+
+// Tools returns the skills tool specs (skills.load/unload/read/run_script).
+func (s *Session) Tools() []llmtoolsgoSpec.Tool { return skilltool.Tools() }
+
+// RegisterTools registers skills tools into an existing llmtools-go Registry.
+func (s *Session) RegisterTools(reg *llmtools.Registry) error {
+	if s == nil || s.rt == nil {
+		return errors.New("nil session runtime")
+	}
+	return skilltool.Register(reg, s.rt, s.id)
+}
+
+// NewToolsRegistry returns a new llmtools-go Registry containing only the skills tools.
+func (s *Session) NewToolsRegistry(opts ...llmtools.RegistryOption) (*llmtools.Registry, error) {
+	if s == nil || s.rt == nil {
+		return nil, errors.New("nil session runtime")
+	}
+	return skilltool.NewSkillsRegistry(s.rt, s.id, opts...)
+}
+
+// NewToolsBuiltinRegistry returns a new llmtools-go Registry containing builtins + skills tools.
+func (s *Session) NewToolsBuiltinRegistry(opts ...llmtools.RegistryOption) (*llmtools.Registry, error) {
+	if s == nil || s.rt == nil {
+		return nil, errors.New("nil session runtime")
+	}
+	return skilltool.NewSkillsBuiltinRegistry(s.rt, s.id, opts...)
 }
 
 func New(opts ...Option) (*Runtime, error) {
@@ -135,6 +170,45 @@ func (r *Runtime) CloseSession(ctx context.Context, id spec.SessionID) error {
 // including tool registration via package /tools.
 func (r *Runtime) Session(id spec.SessionID) *Session {
 	return &Session{rt: r, id: id}
+}
+
+// AvailableSkillsPromptXML builds <available_skills> XML for system prompts.
+// If includeLocation=false, location elements are omitted (tool-only agents).
+func (r *Runtime) AvailableSkillsPromptXML(includeLocation bool) (string, error) {
+	skills := r.ListSkills()
+	return promptxml.AvailableSkillsXML(skills, includeLocation)
+}
+
+// ActiveSkillsPromptXML builds <active_skills> XML containing active SKILL.md bodies in load order.
+func (r *Runtime) ActiveSkillsPromptXML(ctx context.Context, sessionID spec.SessionID) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
+	sess, err := r.mustGetSession(sessionID)
+	if err != nil {
+		return "", err
+	}
+
+	sess.Mu.Lock()
+	active := append([]string(nil), sess.ActiveSkills...)
+	sess.Mu.Unlock()
+
+	records := make([]spec.SkillRecord, 0, len(active))
+	for _, name := range active {
+		rec, err := r.ensureBodyLoaded(ctx, name)
+		if err != nil {
+			return "", err
+		}
+		records = append(records, rec)
+	}
+	return promptxml.ActiveSkillsXML(records)
+}
+
+// AvailableSkillsXMLStruct - if you want to embed XML structs directly.
+func (r *Runtime) AvailableSkillsXMLStruct(includeLocation bool) (any, error) {
+	skills := r.ListSkills()
+	return promptxml.AvailableSkillsStruct(skills, includeLocation), nil
 }
 
 func (r *Runtime) AddSkillDir(ctx context.Context, dir string) (spec.SkillRecord, error) {
@@ -189,39 +263,6 @@ func (r *Runtime) ListSkills() []spec.SkillRecord {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
-}
-
-// AvailableSkillsPromptXML builds <available_skills> XML for system prompts.
-// If includeLocation=false, location elements are omitted (tool-only agents).
-func (r *Runtime) AvailableSkillsPromptXML(includeLocation bool) (string, error) {
-	skills := r.ListSkills()
-	return promptxml.AvailableSkillsXML(skills, includeLocation)
-}
-
-// ActiveSkillsPromptXML builds <active_skills> XML containing active SKILL.md bodies in load order.
-func (r *Runtime) ActiveSkillsPromptXML(ctx context.Context, sessionID spec.SessionID) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-
-	sess, err := r.mustGetSession(sessionID)
-	if err != nil {
-		return "", err
-	}
-
-	sess.Mu.Lock()
-	active := append([]string(nil), sess.ActiveSkills...)
-	sess.Mu.Unlock()
-
-	records := make([]spec.SkillRecord, 0, len(active))
-	for _, name := range active {
-		rec, err := r.ensureBodyLoaded(ctx, name)
-		if err != nil {
-			return "", err
-		}
-		records = append(records, rec)
-	}
-	return promptxml.ActiveSkillsXML(records)
 }
 
 // Load implements skills.load behavior.
@@ -572,12 +613,6 @@ func (r *Runtime) RunScript(
 
 // Tools exposure (wrapper over /tools).
 func (r *Runtime) Tools() []llmtoolsgoSpec.Tool { return skilltool.Tools() }
-
-// AvailableSkillsXMLStruct - if you want to embed XML structs directly.
-func (r *Runtime) AvailableSkillsXMLStruct(includeLocation bool) (any, error) {
-	skills := r.ListSkills()
-	return promptxml.AvailableSkillsStruct(skills, includeLocation), nil
-}
 
 func (r *Runtime) ensureBodyLoaded(ctx context.Context, name string) (spec.SkillRecord, error) {
 	if err := ctx.Err(); err != nil {

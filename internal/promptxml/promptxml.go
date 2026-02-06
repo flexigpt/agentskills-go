@@ -9,20 +9,15 @@ import (
 	"github.com/flexigpt/agentskills-go/spec"
 )
 
-type availableSkills struct {
-	XMLName xml.Name         `xml:"available_skills"`
-	Skills  []availableSkill `xml:"skill"`
-}
-
 type availableSkill struct {
 	Name        string `xml:"name"`
 	Description string `xml:"description"`
 	Location    string `xml:"location,omitempty"`
 }
 
-type activeSkills struct {
-	XMLName xml.Name      `xml:"active_skills"`
-	Skills  []activeSkill `xml:"skill"`
+type availableSkills struct {
+	XMLName xml.Name         `xml:"available_skills"`
+	Skills  []availableSkill `xml:"skill"`
 }
 
 // IMPORTANT: matches spec shape:
@@ -30,6 +25,20 @@ type activeSkills struct {
 type activeSkill struct {
 	Name string `xml:"name,attr"`
 	Body string `xml:",cdata"`
+}
+
+type activeSkills struct {
+	XMLName xml.Name      `xml:"active_skills"`
+	Skills  []activeSkill `xml:"skill"`
+}
+
+func AvailableSkillsXML(skills []spec.SkillRecord, includeLocation bool) (string, error) {
+	v := AvailableSkillsStruct(skills, includeLocation)
+	b, err := xml.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("xml encode: %w", err)
+	}
+	return string(b), nil
 }
 
 func AvailableSkillsStruct(skills []spec.SkillRecord, includeLocation bool) any {
@@ -48,15 +57,6 @@ func AvailableSkillsStruct(skills []spec.SkillRecord, includeLocation bool) any 
 		out.Skills = append(out.Skills, it)
 	}
 	return out
-}
-
-func AvailableSkillsXML(skills []spec.SkillRecord, includeLocation bool) (string, error) {
-	v := AvailableSkillsStruct(skills, includeLocation)
-	b, err := xml.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("xml encode: %w", err)
-	}
-	return string(b), nil
 }
 
 func ActiveSkillsXML(active []spec.SkillRecord) (string, error) {
