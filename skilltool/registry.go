@@ -25,23 +25,3 @@ func NewSkillsRegistry(
 	}
 	return r, nil
 }
-
-// NewSkillsBuiltinRegistry creates a Registry with llmtools-go builtins + skills tools.
-// (Useful when you want a single tool registry for an agent.)
-func NewSkillsBuiltinRegistry(
-	rt spec.Runtime,
-	sessionID spec.SessionID,
-	opts ...llmtools.RegistryOption,
-) (*llmtools.Registry, error) {
-	if rt == nil {
-		return nil, errors.New("nil runtime")
-	}
-	r, err := llmtools.NewBuiltinRegistry(opts...)
-	if err != nil {
-		return nil, err
-	}
-	if err := Register(r, rt, sessionID); err != nil {
-		return nil, err
-	}
-	return r, nil
-}
