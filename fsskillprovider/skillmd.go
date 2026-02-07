@@ -1,4 +1,4 @@
-package skill
+package fsskillprovider
 
 import (
 	"bufio"
@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/flexigpt/agentskills-go/spec"
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,20 +20,24 @@ const (
 	maxSkillMDBytes = 2 << 20 // 2 MiB
 )
 
-// IndexSkillDir reads and validates required frontmatter, but does NOT cache the SKILL.md body.
-// (Body is loaded on skills.load for progressive disclosure.)
-func IndexSkillDir(ctx context.Context, dir string) (spec.SkillRecord, error) {
+// indexSkillDir reads and validates SKILL.md frontmatter, returning metadata and digest.
+// It does NOT return the body; body is loaded separately for progressive disclosure.
+func indexSkillDir(
+	ctx context.Context,
+	rootDir string,
+) (name, description string, props map[string]any, digest string, err error) {
 	if err := ctx.Err(); err != nil {
-		return spec.SkillRecord{}, err
-	}
-	d := strings.TrimSpace(dir)
-	if d == "" {
-		return spec.SkillRecord{}, errors.New("empty dir")
+		return "", "", nil, "", err
 	}
 
-	root, err := filepath.Abs(filepath.Clean(d))
+	root := strings.TrimSpace(rootDir)
+	if root == "" {
+		return "", "", nil, "", errors.New("empty rootDir")
+	}
+
+	root, err = filepath.Abs(filepath.Clean(root))
 	if err != nil {
-		return spec.SkillRecord{}, err
+		return "", "", nil, "", err
 	}
 	if resolved, rerr := filepath.EvalSymlinks(root); rerr == nil && resolved != "" {
 		root = resolved
@@ -42,63 +45,77 @@ func IndexSkillDir(ctx context.Context, dir string) (spec.SkillRecord, error) {
 
 	st, err := os.Stat(root)
 	if err != nil {
-		return spec.SkillRecord{}, err
+		return "", "", nil, "", err
 	}
 	if !st.IsDir() {
-		return spec.SkillRecord{}, fmt.Errorf("not a directory: %s", root)
+		return "", "", nil, "", fmt.Errorf("not a directory: %s", root)
 	}
 
-	loc := filepath.Join(root, skillFileName)
+	skillMDPath := filepath.Join(root, skillFileName)
 
 	// Disallow SKILL.md being a symlink.
-	if lst, lerr := os.Lstat(loc); lerr == nil {
+	if lst, lerr := os.Lstat(skillMDPath); lerr == nil {
 		if lst.Mode()&os.ModeSymlink != 0 {
-			return spec.SkillRecord{}, errors.New("SKILL.md must not be a symlink")
+			return "", "", nil, "", errors.New("SKILL.md must not be a symlink")
 		}
 	}
 
-	b, digest, err := readAllLimitedAndDigest(loc)
+	b, sha, err := readAllLimitedAndDigest(skillMDPath)
 	if err != nil {
-		return spec.SkillRecord{}, err
+		return "", "", nil, "", err
 	}
 
 	fm, _, hasFM, err := splitFrontmatter(string(b))
 	if err != nil {
-		return spec.SkillRecord{}, err
+		return "", "", nil, "", err
 	}
 	if !hasFM {
-		return spec.SkillRecord{}, errors.New("SKILL.md must contain YAML frontmatter")
+		return "", "", nil, "", errors.New("SKILL.md must contain YAML frontmatter")
 	}
 
-	props := map[string]any{}
+	props = map[string]any{}
 	if err := yaml.Unmarshal([]byte(fm), &props); err != nil {
-		return spec.SkillRecord{}, fmt.Errorf("invalid frontmatter YAML: %w", err)
+		return "", "", nil, "", fmt.Errorf("invalid frontmatter YAML: %w", err)
 	}
 
-	name := strings.TrimSpace(asString(props["name"]))
-	desc := strings.TrimSpace(asString(props["description"]))
+	name = strings.TrimSpace(asString(props["name"]))
+	description = strings.TrimSpace(asString(props["description"]))
 
-	if err := validateName(name, filepath.Base(root)); err != nil {
-		return spec.SkillRecord{}, err
+	if err := validateName(name); err != nil {
+		return "", "", nil, "", err
 	}
-	if err := validateDescription(desc); err != nil {
-		return spec.SkillRecord{}, err
+	if err := validateDescription(description); err != nil {
+		return "", "", nil, "", err
 	}
 
-	return spec.SkillRecord{
-		Name:        name,
-		Description: desc,
-		Location:    loc,
-		RootDir:     root,
-		Properties:  props,
-		Digest:      "sha256:" + digest,
-	}, nil
+	// FS convention: name must match directory name.
+	if base := filepath.Base(root); base != "" && name != base {
+		return "", "", nil, "", fmt.Errorf("frontmatter.name %q must match directory name %q", name, base)
+	}
+
+	return name, description, props, "sha256:" + sha, nil
 }
 
-func LoadSkillBody(ctx context.Context, skillMDPath string) (string, error) {
+func loadSkillBody(ctx context.Context, rootDir string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+
+	root := strings.TrimSpace(rootDir)
+	if root == "" {
+		return "", errors.New("empty rootDir")
+	}
+
+	root, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return "", err
+	}
+	if resolved, rerr := filepath.EvalSymlinks(root); rerr == nil && resolved != "" {
+		root = resolved
+	}
+
+	skillMDPath := filepath.Join(root, skillFileName)
+
 	b, _, err := readAllLimitedAndDigest(skillMDPath)
 	if err != nil {
 		return "", err
@@ -112,13 +129,12 @@ func LoadSkillBody(ctx context.Context, skillMDPath string) (string, error) {
 		return "", errors.New("SKILL.md must contain YAML frontmatter")
 	}
 
-	// Validate frontmatter parses (even if already validated at index time).
+	// Validate frontmatter parses.
 	props := map[string]any{}
 	if err := yaml.Unmarshal([]byte(fm), &props); err != nil {
 		return "", fmt.Errorf("invalid frontmatter YAML: %w", err)
 	}
 
-	// Preserve body content as much as possible; remove only the leading newline after delimiter.
 	body = strings.TrimLeft(body, "\r\n")
 	return body, nil
 }
@@ -145,14 +161,12 @@ func readAllLimitedAndDigest(path string) (data []byte, dataSHA string, err erro
 func splitFrontmatter(s string) (frontmatter, body string, has bool, err error) {
 	br := bufio.NewReader(strings.NewReader(s))
 
-	// Read first line.
 	first, ferr := br.ReadString('\n')
 	if ferr != nil && !errors.Is(ferr, io.EOF) {
 		return "", "", false, ferr
 	}
 	first = strings.TrimRight(first, "\r\n")
 	if strings.TrimSpace(first) != "---" {
-		// No frontmatter.
 		return "", s, false, nil
 	}
 
@@ -186,15 +200,12 @@ func splitFrontmatter(s string) (frontmatter, body string, has bool, err error) 
 	return strings.Join(fmLines, "\n"), string(rest), true, nil
 }
 
-func validateName(name, dirBase string) error {
+func validateName(name string) error {
 	if name == "" {
 		return errors.New("frontmatter.name is required")
 	}
 	if len(name) > 64 {
 		return errors.New("frontmatter.name too long (max 64)")
-	}
-	if name != dirBase {
-		return fmt.Errorf("frontmatter.name %q must match directory name %q", name, dirBase)
 	}
 	if strings.HasPrefix(name, "-") || strings.HasSuffix(name, "-") {
 		return errors.New("frontmatter.name must not start or end with '-'")

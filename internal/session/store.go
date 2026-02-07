@@ -1,44 +1,22 @@
-package sessionstore
+package session
 
 import (
 	"container/list"
 	"sync"
 	"time"
 
-	"github.com/flexigpt/llmtools-go/shelltool"
 	"github.com/google/uuid"
+
+	"github.com/flexigpt/agentskills-go/spec"
 )
 
-type ShellBinding struct {
-	Tool           *shelltool.ShellTool
-	ShellSessionID string
-}
+type StoreConfig struct {
+	TTL                 time.Duration
+	MaxSessions         int
+	MaxActivePerSession int
 
-type Session struct {
-	ID string
-
-	Mu sync.Mutex
-
-	ActiveSkills []string
-
-	// One shell binding per skill name (per spec request: per session/skill shell tool).
-	shellBySkill map[string]*ShellBinding
-
-	closed bool
-}
-
-func (s *Session) ShellBindingForSkill(name string) *ShellBinding {
-	s.Mu.Lock()
-	defer s.Mu.Unlock()
-	if s.shellBySkill == nil {
-		s.shellBySkill = map[string]*ShellBinding{}
-	}
-	b := s.shellBySkill[name]
-	if b == nil {
-		b = &ShellBinding{}
-		s.shellBySkill[name] = b
-	}
-	return b
+	Catalog   Catalog
+	Providers ProviderResolver
 }
 
 type Store struct {
@@ -49,6 +27,8 @@ type Store struct {
 
 	lru *list.List               // front=MRU
 	m   map[string]*list.Element // id -> element(Value=*item)
+
+	cfg StoreConfig
 }
 
 type item struct {
@@ -56,42 +36,27 @@ type item struct {
 	lastUsed time.Time
 }
 
-const (
-	defaultTTL = 24 * time.Hour
-	defaultMax = 4096
-)
-
-func New() *Store {
+func NewStore(cfg StoreConfig) *Store {
+	ttl := cfg.TTL
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	maxS := cfg.MaxSessions
+	if maxS <= 0 {
+		maxS = 4096
+	}
 	return &Store{
-		ttl:         defaultTTL,
-		maxSessions: defaultMax,
+		ttl:         ttl,
+		maxSessions: maxS,
 		lru:         list.New(),
 		m:           map[string]*list.Element{},
+		cfg:         cfg,
 	}
 }
 
-func (st *Store) SetTTL(ttl time.Duration) {
-	if ttl < 0 {
-		ttl = 0
-	}
-	st.mu.Lock()
-	st.ttl = ttl
-	st.evictExpiredLocked(time.Now())
-	st.mu.Unlock()
-}
-
-func (st *Store) SetMaxSessions(maxSessions int) {
-	if maxSessions < 0 {
-		maxSessions = 0
-	}
-	st.mu.Lock()
-	st.maxSessions = maxSessions
-	st.evictOverLimitLocked()
-	st.mu.Unlock()
-}
-
-func (st *Store) NewSession() *Session {
+func (st *Store) NewSessionID() string {
 	now := time.Now()
+
 	st.mu.Lock()
 	defer st.mu.Unlock()
 
@@ -99,16 +64,24 @@ func (st *Store) NewSession() *Session {
 	st.evictOverLimitLocked()
 
 	id := uuid.Must(uuid.NewV7()).String()
-	s := &Session{ID: id}
+	s := newSession(SessionConfig{
+		ID:                  id,
+		Catalog:             st.cfg.Catalog,
+		Providers:           st.cfg.Providers,
+		MaxActivePerSession: st.cfg.MaxActivePerSession,
+	})
+
 	e := st.lru.PushFront(&item{s: s, lastUsed: now})
 	st.m[id] = e
 
 	st.evictOverLimitLocked()
-	return s
+
+	return id
 }
 
 func (st *Store) Get(id string) (*Session, bool) {
 	now := time.Now()
+
 	st.mu.Lock()
 	defer st.mu.Unlock()
 
@@ -132,8 +105,25 @@ func (st *Store) Get(id string) (*Session, bool) {
 func (st *Store) Delete(id string) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+
 	if e := st.m[id]; e != nil {
 		st.deleteElemLocked(e)
+	}
+}
+
+// PruneSkill removes the given key from all sessions' active lists.
+func (st *Store) PruneSkill(key spec.SkillKey) {
+	ks := key.Type + "\n" + key.Name + "\n" + key.Path
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
+	for e := st.lru.Front(); e != nil; e = e.Next() {
+		it, _ := e.Value.(*item)
+		if it == nil || it.s == nil || it.s.closed {
+			continue
+		}
+		it.s.pruneKey(ks)
 	}
 }
 
@@ -173,7 +163,7 @@ func (st *Store) evictOverLimitLocked() {
 func (st *Store) deleteElemLocked(e *list.Element) {
 	it, _ := e.Value.(*item)
 	if it != nil && it.s != nil {
-		delete(st.m, it.s.ID)
+		delete(st.m, it.s.id)
 		it.s.closed = true
 	}
 	st.lru.Remove(e)
