@@ -38,6 +38,10 @@ func (s *Session) toolLoad(ctx context.Context, args spec.LoadArgs) (spec.LoadRe
 	if err := ctx.Err(); err != nil {
 		return spec.LoadResult{}, err
 	}
+	s.touchSession()
+	if s.isClosed() {
+		return spec.LoadResult{}, spec.ErrSessionNotFound
+	}
 	mode := args.Mode
 	if strings.TrimSpace(string(mode)) == "" {
 		mode = spec.LoadModeReplace
@@ -78,6 +82,10 @@ func (s *Session) toolLoad(ctx context.Context, args spec.LoadArgs) (spec.LoadRe
 func (s *Session) toolUnload(ctx context.Context, args spec.UnloadArgs) (spec.UnloadResult, error) {
 	if err := ctx.Err(); err != nil {
 		return spec.UnloadResult{}, err
+	}
+	s.touchSession()
+	if s.isClosed() {
+		return spec.UnloadResult{}, spec.ErrSessionNotFound
 	}
 	if !args.All && len(args.Skills) == 0 {
 		return spec.UnloadResult{}, errors.New("skills is required unless all=true")
@@ -138,6 +146,10 @@ func (s *Session) toolRead(ctx context.Context, args spec.ReadArgs) ([]llmtoolsg
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	s.touchSession()
+	if s.isClosed() {
+		return nil, spec.ErrSessionNotFound
+	}
 	if strings.TrimSpace(args.Skill.Name) == "" || strings.TrimSpace(args.Skill.Path) == "" {
 		return nil, fmt.Errorf("%w: skill.name and skill.path are required", spec.ErrInvalidArgument)
 	}
@@ -174,6 +186,10 @@ func (s *Session) toolRead(ctx context.Context, args spec.ReadArgs) ([]llmtoolsg
 func (s *Session) toolRunScript(ctx context.Context, args spec.RunScriptArgs) (spec.RunScriptResult, error) {
 	if err := ctx.Err(); err != nil {
 		return spec.RunScriptResult{}, err
+	}
+	s.touchSession()
+	if s.isClosed() {
+		return spec.RunScriptResult{}, spec.ErrSessionNotFound
 	}
 	if strings.TrimSpace(args.Skill.Name) == "" || strings.TrimSpace(args.Skill.Path) == "" {
 		return spec.RunScriptResult{}, fmt.Errorf("%w: skill.name and skill.path are required", spec.ErrInvalidArgument)

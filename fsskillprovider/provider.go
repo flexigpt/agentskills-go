@@ -1,17 +1,15 @@
 package fsskillprovider
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/flexigpt/llmtools-go/fstool"
+	"github.com/flexigpt/llmtools-go/shelltool"
 	llmtoolsgoSpec "github.com/flexigpt/llmtools-go/spec"
 
 	"github.com/flexigpt/agentskills-go/spec"
@@ -29,13 +27,23 @@ func WithRunScripts(enabled bool) Option {
 	}
 }
 
+// WithRunScriptPolicy configures the shelltool policy used for RunScript.
+func WithRunScriptPolicy(policy shelltool.ShellCommandPolicy) Option {
+	return func(p *Provider) error {
+		p.runScriptPolicy = policy
+		return nil
+	}
+}
+
 type Provider struct {
 	runScriptsEnabled bool
+	runScriptPolicy   shelltool.ShellCommandPolicy
 }
 
 func New(opts ...Option) (*Provider, error) {
 	p := &Provider{
 		runScriptsEnabled: false,
+		runScriptPolicy:   shelltool.DefaultShellCommandPolicy,
 	}
 	for _, o := range opts {
 		if o == nil {
@@ -100,6 +108,9 @@ func (p *Provider) LoadBody(ctx context.Context, key spec.SkillKey) (string, err
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if key.Type != Type {
+		return "", fmt.Errorf("%w: wrong provider type: %q", spec.ErrInvalidArgument, key.Type)
+	}
 	root, err := canonicalRoot(key.Path)
 	if err != nil {
 		return "", err
@@ -115,6 +126,9 @@ func (p *Provider) ReadResource(
 ) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if key.Type != Type {
+		return nil, fmt.Errorf("%w: wrong provider type: %q", spec.ErrInvalidArgument, key.Type)
 	}
 	root, err := canonicalRoot(key.Path)
 	if err != nil {
@@ -158,6 +172,9 @@ func (p *Provider) RunScript(
 	if err := ctx.Err(); err != nil {
 		return spec.RunScriptResult{}, err
 	}
+	if key.Type != Type {
+		return spec.RunScriptResult{}, fmt.Errorf("%w: wrong provider type: %q", spec.ErrInvalidArgument, key.Type)
+	}
 	if !p.runScriptsEnabled {
 		return spec.RunScriptResult{}, spec.ErrRunScriptUnsupported
 	}
@@ -181,9 +198,20 @@ func (p *Provider) RunScript(
 		)
 	}
 
-	scriptAbs, err := joinUnderRoot(root, sp)
+	// Resolve script path with symlink-hardening: resolved path must remain under root.
+	scriptAbs, err := resolveExistingPathUnderRoot(root, sp)
 	if err != nil {
 		return spec.RunScriptResult{}, err
+	}
+	// Disallow the script file itself being a symlink.
+	if lst, lerr := os.Lstat(filepath.Join(root, filepath.Clean(sp))); lerr == nil {
+		if lst.Mode()&os.ModeSymlink != 0 {
+			return spec.RunScriptResult{}, fmt.Errorf(
+				"%w: script must not be a symlink: %q",
+				spec.ErrInvalidArgument,
+				sp,
+			)
+		}
 	}
 
 	wd := strings.TrimSpace(workdir)
@@ -192,53 +220,45 @@ func (p *Provider) RunScript(
 	case "", ".":
 		workdirAbs = root
 	default:
-		workdirAbs, err = joinUnderRoot(root, wd)
+		workdirAbs, err = resolveExistingDirUnderRoot(root, wd)
 		if err != nil {
 			return spec.RunScriptResult{}, err
 		}
 	}
+	shellName, cmdStr := buildScriptCommand(scriptAbs, args)
 
-	cmdName, cmdArgs, err := buildExecCommand(scriptAbs, args)
+	st, err := shelltool.NewShellTool(
+		shelltool.WithShellAllowedWorkdirRoots([]string{root}),
+		shelltool.WithShellCommandPolicy(p.runScriptPolicy),
+		// We don't need shelltool sessions for this use-case.
+		shelltool.WithShellMaxSessions(8),
+		shelltool.WithShellSessionTTL(30*60*1e9), // 30m; harmless even if unused
+	)
 	if err != nil {
 		return spec.RunScriptResult{}, err
 	}
 
-	start := time.Now()
-	cmd := exec.CommandContext(ctx, cmdName, cmdArgs...)
-	cmd.Dir = workdirAbs
-	cmd.Env = mergeEnv(os.Environ(), env)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	runErr := cmd.Run()
-	dur := time.Since(start)
-
-	res := spec.RunScriptResult{
-		Path:       sp,
-		Stdout:     stdout.String(),
-		Stderr:     stderr.String(),
-		DurationMS: dur.Milliseconds(),
+	resp, err := st.Run(ctx, shelltool.ShellCommandArgs{
+		Commands:  []string{cmdStr},
+		Workdir:   workdirAbs,
+		Env:       env,
+		Shell:     shellName,
+		SessionID: "",
+	})
+	if err != nil {
+		return spec.RunScriptResult{}, err
 	}
 
-	if runErr == nil {
-		res.ExitCode = 0
-		return res, nil
+	out := spec.RunScriptResult{Path: sp}
+	if resp != nil && len(resp.Results) > 0 {
+		r0 := resp.Results[0]
+		out.ExitCode = r0.ExitCode
+		out.Stdout = r0.Stdout
+		out.Stderr = r0.Stderr
+		out.TimedOut = r0.TimedOut
+		out.DurationMS = r0.DurationMS
 	}
-
-	// Context timeout flag (best-effort).
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		res.TimedOut = true
-	}
-
-	var ee *exec.ExitError
-	if errors.As(runErr, &ee) {
-		res.ExitCode = ee.ExitCode()
-		return res, nil
-	}
-
-	return spec.RunScriptResult{}, runErr
+	return out, nil
 }
 
 func canonicalRoot(p string) (string, error) {
@@ -265,76 +285,140 @@ func canonicalRoot(p string) (string, error) {
 	return abs, nil
 }
 
-func buildExecCommand(scriptAbs string, args []string) (name string, outArgs []string, err error) {
+// resolveExistingPathUnderRoot resolves rel under root, follows symlinks, and ensures the final
+// resolved path remains within root.
+func resolveExistingPathUnderRoot(root, rel string) (string, error) {
+	cand, err := joinUnderRoot(root, rel)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(cand)
+	if err != nil {
+		return "", err
+	}
+	ok, err := withinRoot(root, resolved)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("%w: path escapes root via symlink: %q", spec.ErrInvalidArgument, rel)
+	}
+	st, err := os.Stat(resolved)
+	if err != nil {
+		return "", err
+	}
+	if st.IsDir() {
+		return "", fmt.Errorf("%w: expected file, got directory: %q", spec.ErrInvalidArgument, rel)
+	}
+	return resolved, nil
+}
+
+func resolveExistingDirUnderRoot(root, rel string) (string, error) {
+	cand, err := joinUnderRoot(root, rel)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(cand)
+	if err != nil {
+		return "", err
+	}
+	ok, err := withinRoot(root, resolved)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", fmt.Errorf("%w: path escapes root via symlink: %q", spec.ErrInvalidArgument, rel)
+	}
+	st, err := os.Stat(resolved)
+	if err != nil {
+		return "", err
+	}
+	if !st.IsDir() {
+		return "", fmt.Errorf("%w: expected directory: %q", spec.ErrInvalidArgument, rel)
+	}
+	return resolved, nil
+}
+
+// buildScriptCommand chooses a shell and builds a cross-platform command string for shelltool.
+func buildScriptCommand(scriptAbs string, args []string) (shellName shelltool.ShellName, invoke string) {
 	ext := strings.ToLower(filepath.Ext(scriptAbs))
 
 	if isWindows() {
-		switch ext {
-		case ".ps1":
-			if _, e := exec.LookPath("pwsh"); e == nil {
-				return "pwsh", append(
-					[]string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptAbs},
-					args...), nil
+		// Prefer pwsh, then powershell, then cmd.
+		if ext == ".ps1" {
+			if _, err := exec.LookPath("pwsh"); err == nil {
+				return shelltool.ShellNamePwsh, psInvoke(scriptAbs, args)
 			}
-			if _, e := exec.LookPath("powershell"); e == nil {
-				return "powershell", append(
-					[]string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptAbs},
-					args...), nil
-			}
-			return "", nil, fmt.Errorf("%w: powershell not found to run %q", spec.ErrRunScriptUnsupported, scriptAbs)
-
-		case ".bat", ".cmd":
-			// "cmd" /C "scriptAbs" arg1 arg2 ...
-			a := append([]string{"/C", scriptAbs}, args...)
-			return "cmd", a, nil
-
-		default:
-			// Best-effort: execute directly (for .exe) else cmd /C.
-			if ext == ".exe" {
-				return scriptAbs, args, nil
-			}
-			return "cmd", append([]string{"/C", scriptAbs}, args...), nil
+			return shelltool.ShellNamePowershell, psInvoke(scriptAbs, args)
 		}
+		// "".bat/.cmd" (or fallback): cmd call.
+		return shelltool.ShellNameCmd, cmdInvoke(scriptAbs, args)
 	}
 
-	switch ext {
-	case ".sh":
-		return "sh", append([]string{scriptAbs}, args...), nil
-	default:
-		// Run directly (requires executable bit/shebang if not a binary).
-		return scriptAbs, args, nil
+	if ext == ".sh" {
+		return shelltool.ShellNameSh, posixInvokeWithInterpreter("sh", scriptAbs, args)
 	}
+	return shelltool.ShellNameSh, posixInvoke(scriptAbs, args)
 }
 
-func mergeEnv(base []string, overrides map[string]string) []string {
-	if len(overrides) == 0 {
-		return base
+func posixInvoke(program string, args []string) string {
+	parts := make([]string, 0, 1+len(args))
+	parts = append(parts, posixQuote(program))
+	for _, a := range args {
+		parts = append(parts, posixQuote(a))
 	}
+	return strings.Join(parts, " ")
+}
 
-	// Preserve base, override by key (case-sensitive; matches Go/Unix behavior).
-	out := make([]string, 0, len(base)+len(overrides))
-	seen := map[string]struct{}{}
-
-	for _, kv := range base {
-		k := kv
-		if before, _, ok := strings.Cut(kv, "="); ok {
-			k = before
-		}
-		if v, ok := overrides[k]; ok {
-			out = append(out, k+"="+v)
-			seen[k] = struct{}{}
-		} else {
-			out = append(out, kv)
-			seen[k] = struct{}{}
-		}
+func posixInvokeWithInterpreter(interpreter, scriptAbs string, args []string) string {
+	parts := make([]string, 0, 2+len(args))
+	parts = append(parts, posixQuote(interpreter), posixQuote(scriptAbs))
+	for _, a := range args {
+		parts = append(parts, posixQuote(a))
 	}
+	return strings.Join(parts, " ")
+}
 
-	for k, v := range overrides {
-		if _, ok := seen[k]; ok {
-			continue
-		}
-		out = append(out, k+"="+v)
+func psInvoke(scriptAbs string, args []string) string {
+	parts := make([]string, 0, 2+len(args))
+	parts = append(parts, "&", psQuote(scriptAbs))
+	for _, a := range args {
+		parts = append(parts, psQuote(a))
 	}
+	return strings.Join(parts, " ")
+}
 
-	return out
+func cmdInvoke(scriptAbs string, args []string) string {
+	parts := make([]string, 0, 2+len(args))
+	parts = append(parts, "call", cmdQuote(scriptAbs))
+	for _, a := range args {
+		parts = append(parts, cmdQuote(a))
+	}
+	return strings.Join(parts, " ")
+}
+
+func cmdQuote(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return `""`
+	}
+	if strings.ContainsAny(s, " \t") || strings.ContainsRune(s, '"') {
+		s = strings.ReplaceAll(s, `"`, `""`)
+		return `"` + s + `"`
+	}
+	return s
+}
+
+func psQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+func posixQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	if !strings.ContainsRune(s, '\'') {
+		return "'" + s + "'"
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
