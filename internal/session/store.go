@@ -69,6 +69,7 @@ func (st *Store) NewSessionID() string {
 		Catalog:             st.cfg.Catalog,
 		Providers:           st.cfg.Providers,
 		MaxActivePerSession: st.cfg.MaxActivePerSession,
+		Touch:               func() { st.touch(id) },
 	})
 
 	e := st.lru.PushFront(&item{s: s, lastUsed: now})
@@ -92,7 +93,8 @@ func (st *Store) Get(id string) (*Session, bool) {
 		return nil, false
 	}
 	it, _ := e.Value.(*item)
-	if it == nil || it.s == nil || it.s.closed {
+	if it == nil || it.s == nil || it.s.closed.Load() {
+
 		st.deleteElemLocked(e)
 		return nil, false
 	}
@@ -120,7 +122,7 @@ func (st *Store) PruneSkill(key spec.SkillKey) {
 
 	for e := st.lru.Front(); e != nil; e = e.Next() {
 		it, _ := e.Value.(*item)
-		if it == nil || it.s == nil || it.s.closed {
+		if it == nil || it.s == nil || it.s.closed.Load() {
 			continue
 		}
 		it.s.pruneKey(ks)
@@ -164,7 +166,29 @@ func (st *Store) deleteElemLocked(e *list.Element) {
 	it, _ := e.Value.(*item)
 	if it != nil && it.s != nil {
 		delete(st.m, it.s.id)
-		it.s.closed = true
+		it.s.closed.Store(true)
+
 	}
 	st.lru.Remove(e)
+}
+
+// touch updates lastUsed and MRU position for an existing session.
+// Safe to call frequently; does not allocate.
+func (st *Store) touch(id string) {
+	now := time.Now()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.evictExpiredLocked(now)
+
+	e := st.m[id]
+	if e == nil {
+		return
+	}
+	it, _ := e.Value.(*item)
+	if it == nil || it.s == nil || it.s.closed.Load() {
+		st.deleteElemLocked(e)
+		return
+	}
+	it.lastUsed = now
+	st.lru.MoveToFront(e)
 }

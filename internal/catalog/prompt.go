@@ -40,16 +40,19 @@ func (f Filter) match(e *entry) bool {
 
 // AvailableSkillsPromptXML builds <available_skills> XML for system prompts.
 func (c *Catalog) AvailableSkillsPromptXML(f Filter) (string, error) {
-	entries := c.listEntriesForPrompt(f)
-
-	items := make([]AvailableSkillItem, 0, len(entries))
-	for _, e := range entries {
+	c.mu.RLock()
+	items := make([]AvailableSkillItem, 0, len(c.byKey))
+	for _, e := range c.byKey {
+		if !f.match(e) {
+			continue
+		}
 		items = append(items, AvailableSkillItem{
 			Name:        e.llmName,
 			Description: e.rec.Description,
 			Path:        e.rec.Key.Path,
 		})
 	}
+	c.mu.RUnlock()
 
-	return AvailableSkillsXML(items)
+	return AvailableSkillsXML(items) // sorts internally
 }

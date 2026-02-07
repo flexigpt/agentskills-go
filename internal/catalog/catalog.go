@@ -210,26 +210,6 @@ func (c *Catalog) ListRecords(f Filter) []spec.SkillRecord {
 	return out
 }
 
-func (c *Catalog) listEntriesForPrompt(f Filter) []*entry {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	out := make([]*entry, 0, len(c.byKey))
-	for _, e := range c.byKey {
-		if !f.match(e) {
-			continue
-		}
-		out = append(out, e)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].llmName == out[j].llmName {
-			return out[i].rec.Key.Path < out[j].rec.Key.Path
-		}
-		return out[i].llmName < out[j].llmName
-	})
-	return out
-}
-
 // Conflict handling / name computation.
 // Rule: LLM sees (name + path). Normally "name" is key.Name.
 // Only when there is a collision on (Name, Path) across different providers,

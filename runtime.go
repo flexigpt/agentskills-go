@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/flexigpt/llmtools-go"
@@ -111,6 +112,7 @@ func (r *Runtime) ProviderTypes() []string {
 	for t := range r.providers {
 		out = append(out, t)
 	}
+	sort.Strings(out)
 	return out
 }
 
