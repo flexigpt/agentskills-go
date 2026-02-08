@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -47,15 +46,16 @@ func (s *Session) toolLoad(ctx context.Context, args spec.LoadArgs) (spec.LoadRe
 		mode = spec.LoadModeReplace
 	}
 	if mode != spec.LoadModeReplace && mode != spec.LoadModeAdd {
-		return spec.LoadResult{}, errors.New("mode must be 'replace' or 'add'")
+		return spec.LoadResult{}, fmt.Errorf("%w: mode must be 'replace' or 'add'", spec.ErrInvalidArgument)
 	}
 	if len(args.Skills) == 0 {
-		return spec.LoadResult{}, errors.New("skills is required")
+		return spec.LoadResult{}, fmt.Errorf("%w: skills is required", spec.ErrInvalidArgument)
 	}
 
 	// Resolve handles -> internal keys (dedupe).
 	reqKeys := make([]spec.SkillKey, 0, len(args.Skills))
-	seen := map[string]struct{}{}
+	seen := map[spec.SkillKey]struct{}{}
+
 	for _, h := range args.Skills {
 		if strings.TrimSpace(h.Name) == "" || strings.TrimSpace(h.Path) == "" {
 			return spec.LoadResult{}, fmt.Errorf("%w: each skill requires name and path", spec.ErrInvalidArgument)
@@ -64,11 +64,11 @@ func (s *Session) toolLoad(ctx context.Context, args spec.LoadArgs) (spec.LoadRe
 		if !ok {
 			return spec.LoadResult{}, fmt.Errorf("%w: unknown skill handle: %+v", spec.ErrSkillNotFound, h)
 		}
-		ks := keyStr(k)
-		if _, ok := seen[ks]; ok {
+		if _, ok := seen[k]; ok {
 			continue
 		}
-		seen[ks] = struct{}{}
+		seen[k] = struct{}{}
+
 		reqKeys = append(reqKeys, k)
 	}
 
@@ -88,13 +88,16 @@ func (s *Session) toolUnload(ctx context.Context, args spec.UnloadArgs) (spec.Un
 		return spec.UnloadResult{}, spec.ErrSessionNotFound
 	}
 	if !args.All && len(args.Skills) == 0 {
-		return spec.UnloadResult{}, errors.New("skills is required unless all=true")
+		return spec.UnloadResult{}, fmt.Errorf("%w: skills is required unless all=true", spec.ErrInvalidArgument)
 	}
 
 	if args.All {
 		s.mu.Lock()
-		s.activeByKey = map[string]spec.SkillKey{}
+		s.activeSet = map[spec.SkillKey]struct{}{}
+
 		s.activeOrder = nil
+		s.stateVersion++
+
 		handles, err := s.activeHandlesLocked()
 		s.mu.Unlock()
 		if err != nil {
@@ -104,7 +107,8 @@ func (s *Session) toolUnload(ctx context.Context, args spec.UnloadArgs) (spec.Un
 	}
 
 	// Resolve handles to keys.
-	rm := map[string]struct{}{}
+	rm := map[spec.SkillKey]struct{}{}
+
 	for _, h := range args.Skills {
 		if strings.TrimSpace(h.Name) == "" || strings.TrimSpace(h.Path) == "" {
 			return spec.UnloadResult{}, fmt.Errorf("%w: each skill requires name and path", spec.ErrInvalidArgument)
@@ -113,27 +117,30 @@ func (s *Session) toolUnload(ctx context.Context, args spec.UnloadArgs) (spec.Un
 		if !ok {
 			return spec.UnloadResult{}, fmt.Errorf("%w: unknown skill handle: %+v", spec.ErrSkillNotFound, h)
 		}
-		rm[keyStr(k)] = struct{}{}
+		rm[k] = struct{}{}
+
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for ks := range rm {
-		delete(s.activeByKey, ks)
+	for k := range rm {
+		delete(s.activeSet, k)
 	}
 	// Filter order.
 	next := s.activeOrder[:0]
-	for _, ks := range s.activeOrder {
-		if _, remove := rm[ks]; remove {
+	for _, k := range s.activeOrder {
+		if _, remove := rm[k]; remove {
 			continue
 		}
-		if _, ok := s.activeByKey[ks]; !ok {
+		if _, ok := s.activeSet[k]; !ok {
 			continue
 		}
-		next = append(next, ks)
+		next = append(next, k)
+
 	}
 	s.activeOrder = next
+	s.stateVersion++
 
 	handles, err := s.activeHandlesLocked()
 	if err != nil {
@@ -162,9 +169,8 @@ func (s *Session) toolRead(ctx context.Context, args spec.ReadArgs) ([]llmtoolsg
 		return nil, fmt.Errorf("%w: unknown skill handle: %+v", spec.ErrSkillNotFound, args.Skill)
 	}
 
-	ks := keyStr(k)
 	s.mu.Lock()
-	active := s.isActiveLocked(ks)
+	active := s.isActiveLocked(k)
 	s.mu.Unlock()
 	if !active {
 		return nil, spec.ErrSkillNotActive
@@ -203,9 +209,9 @@ func (s *Session) toolRunScript(ctx context.Context, args spec.RunScriptArgs) (s
 		return spec.RunScriptResult{}, fmt.Errorf("%w: unknown skill handle: %+v", spec.ErrSkillNotFound, args.Skill)
 	}
 
-	ks := keyStr(k)
 	s.mu.Lock()
-	active := s.isActiveLocked(ks)
+	active := s.isActiveLocked(k)
+
 	s.mu.Unlock()
 	if !active {
 		return spec.RunScriptResult{}, spec.ErrSkillNotActive

@@ -2,9 +2,7 @@ package session
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -36,37 +34,31 @@ type SessionConfig struct {
 type Session struct {
 	id string
 
-	mu sync.Mutex
-
 	catalog   Catalog
 	providers ProviderResolver
 
-	maxActive int
+	maxActive   int
+	activeOrder []spec.SkillKey // Active skills are stored as internal keys; order is activation order.
+	activeSet   map[spec.SkillKey]struct{}
 
-	// Active skills are stored as internal keys; order is activation order.
-	activeOrder []string                 // []keyStr
-	activeByKey map[string]spec.SkillKey // keyStr -> key
-
-	closed atomic.Bool
-	touch  func()
+	mu           sync.Mutex
+	stateVersion uint64 // stateVersion increments on every mutation; used for optimistic concurrency.
+	closed       atomic.Bool
+	touch        func()
 }
 
 func newSession(cfg SessionConfig) *Session {
 	return &Session{
-		id:          cfg.ID,
-		catalog:     cfg.Catalog,
-		providers:   cfg.Providers,
-		maxActive:   cfg.MaxActivePerSession,
-		activeByKey: map[string]spec.SkillKey{},
-		touch:       cfg.Touch,
+		id:        cfg.ID,
+		catalog:   cfg.Catalog,
+		providers: cfg.Providers,
+		maxActive: cfg.MaxActivePerSession,
+		activeSet: map[spec.SkillKey]struct{}{},
+		touch:     cfg.Touch,
 	}
 }
 
 func (s *Session) ID() string { return s.id }
-
-func keyStr(k spec.SkillKey) string {
-	return k.Type + "\n" + k.Name + "\n" + k.Path
-}
 
 func (s *Session) ActiveSkillsPromptXML(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
@@ -79,14 +71,11 @@ func (s *Session) ActiveSkillsPromptXML(ctx context.Context) (string, error) {
 	}
 
 	s.mu.Lock()
-	order := append([]string(nil), s.activeOrder...)
-	byKey := make(map[string]spec.SkillKey, len(s.activeByKey))
-	maps.Copy(byKey, s.activeByKey)
+	order := append([]spec.SkillKey(nil), s.activeOrder...)
 	s.mu.Unlock()
 
 	items := make([]catalog.ActiveSkillItem, 0, len(order))
-	for _, ks := range order {
-		k := byKey[ks]
+	for _, k := range order {
 
 		h, ok := s.catalog.HandleForKey(k)
 		if !ok {
@@ -124,22 +113,23 @@ func (s *Session) ActivateKeys(
 		m = spec.LoadModeReplace
 	}
 	if m != spec.LoadModeReplace && m != spec.LoadModeAdd {
-		return nil, errors.New("mode must be 'replace' or 'add'")
+		return nil, fmt.Errorf("%w: mode must be 'replace' or 'add'", spec.ErrInvalidArgument)
 	}
 	if len(keys) == 0 {
-		return nil, errors.New("keys is required")
+		return nil, fmt.Errorf("%w: keys is required", spec.ErrInvalidArgument)
 	}
 
 	// Validate keys exist in catalog (and dedupe).
 	// Robustness: if key.Path is not canonical, attempt to canonicalize via provider.Index and
 	// then match against catalog using the normalized key.
 	req := make([]spec.SkillKey, 0, len(keys))
-	seen := map[string]struct{}{}
+	seen := map[spec.SkillKey]struct{}{}
+
 	for _, k := range keys {
-		ks := keyStr(k)
-		if _, ok := seen[ks]; ok {
+		if _, ok := seen[k]; ok {
 			continue
 		}
+
 		if _, ok := s.catalog.Get(k); !ok {
 			// Try provider-based canonicalization.
 			p, okp := s.providers.Provider(k.Type)
@@ -148,61 +138,63 @@ func (s *Session) ActivateKeys(
 			}
 			rec, err := p.Index(ctx, k)
 			if err != nil {
-				return nil, fmt.Errorf("%w: unknown skill key: %+v", spec.ErrSkillNotFound, k)
+				return nil, fmt.Errorf("%w: unknown skill key: %+v: %w", spec.ErrSkillNotFound, k, err)
 			}
 			k = rec.Key
-			ks = keyStr(k)
 			if _, ok2 := s.catalog.Get(k); !ok2 {
 				return nil, fmt.Errorf("%w: unknown skill key: %+v", spec.ErrSkillNotFound, k)
 			}
 		}
-		seen[ks] = struct{}{}
+		seen[k] = struct{}{}
 		req = append(req, k)
 	}
 	// Progressive disclosure: ensure bodies loadable BEFORE committing state.
 	// Also handle concurrent mutations safely via a small retry loop.
-	for range 3 {
+	for range 5 {
 		s.mu.Lock()
 		if s.isClosed() {
 			s.mu.Unlock()
 			return nil, spec.ErrSessionNotFound
 		}
 
-		// Snapshot current state for "add" mode.
-		currentOrder := append([]string(nil), s.activeOrder...)
-		currentByKey := make(map[string]spec.SkillKey, len(s.activeByKey))
-		maps.Copy(currentByKey, s.activeByKey)
+		snapVer := s.stateVersion
+		currentOrder := append([]spec.SkillKey(nil), s.activeOrder...)
+		currentSet := make(map[spec.SkillKey]struct{}, len(s.activeSet))
+		for k := range s.activeSet {
+			currentSet[k] = struct{}{}
+		}
 		s.mu.Unlock()
 
 		// Compute next state without holding lock.
-		nextByKey := map[string]spec.SkillKey{}
-		nextOrder := make([]string, 0, len(currentOrder)+len(req))
+		nextSet := map[spec.SkillKey]struct{}{}
+		nextOrder := make([]spec.SkillKey, 0, len(currentOrder)+len(req))
 
 		switch m {
 		case spec.LoadModeReplace:
 			for _, k := range req {
-				ks := keyStr(k)
-				nextByKey[ks] = k
-				nextOrder = append(nextOrder, ks)
+
+				nextSet[k] = struct{}{}
+				nextOrder = append(nextOrder, k)
 			}
 		case spec.LoadModeAdd:
-			reqSet := map[string]struct{}{}
+			reqSet := map[spec.SkillKey]struct{}{}
+
 			for _, k := range req {
-				reqSet[keyStr(k)] = struct{}{}
+				reqSet[k] = struct{}{}
 			}
-			for _, ks := range currentOrder {
-				if _, isReq := reqSet[ks]; isReq {
+			for _, k := range currentOrder {
+				if _, isReq := reqSet[k]; isReq {
 					continue
 				}
-				if k, ok := currentByKey[ks]; ok {
-					nextByKey[ks] = k
-					nextOrder = append(nextOrder, ks)
+				if _, ok := currentSet[k]; !ok {
+					continue
 				}
+				nextSet[k] = struct{}{}
+				nextOrder = append(nextOrder, k)
 			}
 			for _, k := range req {
-				ks := keyStr(k)
-				nextByKey[ks] = k
-				nextOrder = append(nextOrder, ks)
+				nextSet[k] = struct{}{}
+				nextOrder = append(nextOrder, k)
 			}
 		}
 
@@ -211,8 +203,7 @@ func (s *Session) ActivateKeys(
 		}
 
 		// Ensure bodies are loadable (IO) without lock.
-		for _, ks := range nextOrder {
-			k := nextByKey[ks]
+		for _, k := range nextOrder {
 			if _, err := s.catalog.EnsureBody(ctx, k); err != nil {
 				return nil, err
 			}
@@ -224,23 +215,27 @@ func (s *Session) ActivateKeys(
 			s.mu.Unlock()
 			return nil, spec.ErrSessionNotFound
 		}
-		s.activeByKey = nextByKey
+		if s.stateVersion != snapVer {
+			// Concurrent modification detected; retry with a fresh snapshot.
+			s.mu.Unlock()
+			continue
+		}
+		s.activeSet = nextSet
+
 		s.activeOrder = nextOrder
+		s.stateVersion++
+
 		handles, err := s.activeHandlesLocked()
 		s.mu.Unlock()
 		return handles, err
 	}
 
-	return nil, errors.New("concurrent session modification; please retry")
+	return nil, fmt.Errorf("%w: concurrent session modification; please retry", spec.ErrInvalidArgument)
 }
 
 func (s *Session) activeHandlesLocked() ([]spec.SkillHandle, error) {
 	out := make([]spec.SkillHandle, 0, len(s.activeOrder))
-	for _, ks := range s.activeOrder {
-		k, ok := s.activeByKey[ks]
-		if !ok {
-			continue
-		}
+	for _, k := range s.activeOrder {
 		h, ok := s.catalog.HandleForKey(k)
 		if !ok {
 			return nil, spec.ErrSkillNotFound
@@ -250,10 +245,7 @@ func (s *Session) activeHandlesLocked() ([]spec.SkillHandle, error) {
 	return out, nil
 }
 
-func (s *Session) isActiveLocked(ks string) bool {
-	_, ok := s.activeByKey[ks]
-	return ok
-}
+func (s *Session) isActiveLocked(k spec.SkillKey) bool { _, ok := s.activeSet[k]; return ok }
 
 func (s *Session) touchSession() {
 	if s.touch != nil {
@@ -263,15 +255,16 @@ func (s *Session) touchSession() {
 
 func (s *Session) isClosed() bool { return s.closed.Load() }
 
-func (s *Session) pruneKey(ks string) {
+func (s *Session) pruneKey(k spec.SkillKey) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, ok := s.activeByKey[ks]; !ok {
+	if _, ok := s.activeSet[k]; !ok {
 		return
 	}
-	delete(s.activeByKey, ks)
+	delete(s.activeSet, k)
+	s.stateVersion++
 
 	// Remove from order slice.
-	s.activeOrder = slices.DeleteFunc(s.activeOrder, func(v string) bool { return v == ks })
+	s.activeOrder = slices.DeleteFunc(s.activeOrder, func(v spec.SkillKey) bool { return v == k })
 }

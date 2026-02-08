@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/flexigpt/llmtools-go/fstool"
 	"github.com/flexigpt/llmtools-go/shelltool"
@@ -16,6 +17,11 @@ import (
 )
 
 const Type = "fs"
+
+var (
+	defaultAllowedScriptsExtensionWin    = map[string]struct{}{".ps1": {}, ".py": {}}
+	defaultAllowedScriptsExtensionNonWin = map[string]struct{}{".sh": {}, ".py": {}}
+)
 
 type Option func(*Provider) error
 
@@ -35,15 +41,39 @@ func WithRunScriptPolicy(policy shelltool.ShellCommandPolicy) Option {
 	}
 }
 
+// WithAllowedScriptExtensions restricts which script extensions may be executed.
+// Defaults:
+//   - Windows: [".ps1"]
+//   - non-Windows: [".sh"]
+func WithAllowedScriptExtensions(exts []string) Option {
+	return func(p *Provider) error {
+		m := map[string]struct{}{}
+		for _, e := range exts {
+			e = strings.ToLower(strings.TrimSpace(e))
+			if e == "" {
+				continue
+			}
+			if !strings.HasPrefix(e, ".") {
+				e = "." + e
+			}
+			m[e] = struct{}{}
+		}
+		p.allowedScriptExt = m
+		return nil
+	}
+}
+
 type Provider struct {
 	runScriptsEnabled bool
 	runScriptPolicy   shelltool.ShellCommandPolicy
+	allowedScriptExt  map[string]struct{}
 }
 
 func New(opts ...Option) (*Provider, error) {
 	p := &Provider{
 		runScriptsEnabled: false,
 		runScriptPolicy:   shelltool.DefaultShellCommandPolicy,
+		allowedScriptExt:  nil,
 	}
 	for _, o := range opts {
 		if o == nil {
@@ -51,6 +81,14 @@ func New(opts ...Option) (*Provider, error) {
 		}
 		if err := o(p); err != nil {
 			return nil, err
+		}
+	}
+	// Defaults if unset.
+	if p.allowedScriptExt == nil {
+		if isWindows() {
+			p.allowedScriptExt = defaultAllowedScriptsExtensionWin
+		} else {
+			p.allowedScriptExt = defaultAllowedScriptsExtensionNonWin
 		}
 	}
 	return p, nil
@@ -203,6 +241,16 @@ func (p *Provider) RunScript(
 	if err != nil {
 		return spec.RunScriptResult{}, err
 	}
+
+	ext := strings.ToLower(filepath.Ext(scriptAbs))
+	if _, ok := p.allowedScriptExt[ext]; !ok {
+		return spec.RunScriptResult{}, fmt.Errorf(
+			"%w: script extension %q is not allowed",
+			spec.ErrInvalidArgument,
+			ext,
+		)
+	}
+
 	// Disallow the script file itself being a symlink.
 	if lst, lerr := os.Lstat(filepath.Join(root, filepath.Clean(sp))); lerr == nil {
 		if lst.Mode()&os.ModeSymlink != 0 {
@@ -225,14 +273,28 @@ func (p *Provider) RunScript(
 			return spec.RunScriptResult{}, err
 		}
 	}
-	shellName, cmdStr := buildScriptCommand(scriptAbs, args)
+	// Validate args (avoid NUL bytes and extremely large args).
+	for i, a := range args {
+		if strings.ContainsRune(a, '\x00') {
+			return spec.RunScriptResult{}, fmt.Errorf("%w: args[%d] contains NUL byte", spec.ErrInvalidArgument, i)
+		}
+		if len(a) > 16*1024 {
+			return spec.RunScriptResult{}, fmt.Errorf("%w: args[%d] too long", spec.ErrInvalidArgument, i)
+		}
+	}
+
+	shellName, cmdStr, err := buildScriptCommand(scriptAbs, args)
+	if err != nil {
+		return spec.RunScriptResult{}, err
+	}
 
 	st, err := shelltool.NewShellTool(
 		shelltool.WithShellAllowedWorkdirRoots([]string{root}),
 		shelltool.WithShellCommandPolicy(p.runScriptPolicy),
 		// We don't need shelltool sessions for this use-case.
 		shelltool.WithShellMaxSessions(8),
-		shelltool.WithShellSessionTTL(30*60*1e9), // 30m; harmless even if unused
+		shelltool.WithShellSessionTTL(30*time.Minute), // harmless even if unused
+
 	)
 	if err != nil {
 		return spec.RunScriptResult{}, err
@@ -310,6 +372,9 @@ func resolveExistingPathUnderRoot(root, rel string) (string, error) {
 	if st.IsDir() {
 		return "", fmt.Errorf("%w: expected file, got directory: %q", spec.ErrInvalidArgument, rel)
 	}
+	if !st.Mode().IsRegular() {
+		return "", fmt.Errorf("%w: expected regular file: %q", spec.ErrInvalidArgument, rel)
+	}
 	return resolved, nil
 }
 
@@ -340,34 +405,32 @@ func resolveExistingDirUnderRoot(root, rel string) (string, error) {
 }
 
 // buildScriptCommand chooses a shell and builds a cross-platform command string for shelltool.
-func buildScriptCommand(scriptAbs string, args []string) (shellName shelltool.ShellName, invoke string) {
+func buildScriptCommand(scriptAbs string, args []string) (shellName shelltool.ShellName, invoke string, err error) {
 	ext := strings.ToLower(filepath.Ext(scriptAbs))
 
 	if isWindows() {
-		// Prefer pwsh, then powershell, then cmd.
+		// Hardened default: only support PowerShell scripts.
+
 		if ext == ".ps1" {
 			if _, err := exec.LookPath("pwsh"); err == nil {
-				return shelltool.ShellNamePwsh, psInvoke(scriptAbs, args)
+				return shelltool.ShellNamePwsh, psInvoke(scriptAbs, args), nil
 			}
-			return shelltool.ShellNamePowershell, psInvoke(scriptAbs, args)
+			return shelltool.ShellNamePowershell, psInvoke(scriptAbs, args), nil
 		}
 		// "".bat/.cmd" (or fallback): cmd call.
-		return shelltool.ShellNameCmd, cmdInvoke(scriptAbs, args)
+		return "", "", fmt.Errorf("%w: only .ps1 scripts are supported on windows", spec.ErrInvalidArgument)
 	}
 
 	if ext == ".sh" {
-		return shelltool.ShellNameSh, posixInvokeWithInterpreter("sh", scriptAbs, args)
+		// Avoid PATH-dependent "sh" resolution inside the running shell by using an absolute interpreter path.
+		shPath, err := exec.LookPath("sh")
+		if err != nil || strings.TrimSpace(shPath) == "" {
+			return "", "", fmt.Errorf("%w: could not find 'sh' interpreter", spec.ErrInvalidArgument)
+		}
+		return shelltool.ShellNameSh, posixInvokeWithInterpreter(shPath, scriptAbs, args), nil
 	}
-	return shelltool.ShellNameSh, posixInvoke(scriptAbs, args)
-}
 
-func posixInvoke(program string, args []string) string {
-	parts := make([]string, 0, 1+len(args))
-	parts = append(parts, posixQuote(program))
-	for _, a := range args {
-		parts = append(parts, posixQuote(a))
-	}
-	return strings.Join(parts, " ")
+	return "", "", fmt.Errorf("%w: only .sh scripts are supported on non-windows", spec.ErrInvalidArgument)
 }
 
 func posixInvokeWithInterpreter(interpreter, scriptAbs string, args []string) string {
@@ -386,27 +449,6 @@ func psInvoke(scriptAbs string, args []string) string {
 		parts = append(parts, psQuote(a))
 	}
 	return strings.Join(parts, " ")
-}
-
-func cmdInvoke(scriptAbs string, args []string) string {
-	parts := make([]string, 0, 2+len(args))
-	parts = append(parts, "call", cmdQuote(scriptAbs))
-	for _, a := range args {
-		parts = append(parts, cmdQuote(a))
-	}
-	return strings.Join(parts, " ")
-}
-
-func cmdQuote(s string) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return `""`
-	}
-	if strings.ContainsAny(s, " \t") || strings.ContainsRune(s, '"') {
-		s = strings.ReplaceAll(s, `"`, `""`)
-		return `"` + s + `"`
-	}
-	return s
 }
 
 func psQuote(s string) string {

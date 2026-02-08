@@ -58,6 +58,9 @@ func indexSkillDir(
 		if lst.Mode()&os.ModeSymlink != 0 {
 			return "", "", nil, "", errors.New("SKILL.md must not be a symlink")
 		}
+		if !lst.Mode().IsRegular() {
+			return "", "", nil, "", errors.New("SKILL.md must be a regular file")
+		}
 	}
 
 	b, sha, err := readAllLimitedAndDigest(skillMDPath)
@@ -119,6 +122,16 @@ func loadSkillBody(ctx context.Context, rootDir string) (string, error) {
 	b, _, err := readAllLimitedAndDigest(skillMDPath)
 	if err != nil {
 		return "", err
+	}
+
+	// Match index hardening: disallow symlink / non-regular file.
+	if lst, lerr := os.Lstat(skillMDPath); lerr == nil {
+		if lst.Mode()&os.ModeSymlink != 0 {
+			return "", errors.New("SKILL.md must not be a symlink")
+		}
+		if !lst.Mode().IsRegular() {
+			return "", errors.New("SKILL.md must be a regular file")
+		}
 	}
 
 	fm, body, hasFM, err := splitFrontmatter(string(b))

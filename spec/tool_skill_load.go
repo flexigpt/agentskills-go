@@ -9,7 +9,7 @@ func SkillsLoadTool() llmtoolsgoSpec.Tool {
 		SchemaVersion: llmtoolsgoSpec.SchemaVersion,
 		ID:            "019bfeda-33f2-7315-9007-de55935d2401",
 		Slug:          "skills.load",
-		Version:       "v2.0.0",
+		Version:       "v1.0.0",
 		DisplayName:   "Skills Load",
 		Description:   "Load one or more skills into the current session (progressive disclosure). Uses (name + path) handles; session-bound (no sessionID arg).",
 		Tags:          []string{"skills"},

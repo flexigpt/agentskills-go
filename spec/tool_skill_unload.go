@@ -9,7 +9,7 @@ func SkillsUnloadTool() llmtoolsgoSpec.Tool {
 		SchemaVersion: llmtoolsgoSpec.SchemaVersion,
 		ID:            "019bfeda-33f2-7315-9007-de55935d2402",
 		Slug:          "skills.unload",
-		Version:       "v2.0.0",
+		Version:       "v1.0.0",
 		DisplayName:   "Skills Unload",
 		Description:   "Unload skills from the current session. Uses (name + path) handles; session-bound (no sessionID arg).",
 		Tags:          []string{"skills"},

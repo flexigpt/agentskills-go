@@ -23,29 +23,33 @@ type entry struct {
 	llmName    string
 }
 
+type handleKey struct {
+	Name string
+	Path string
+}
+
 type Catalog struct {
 	mu sync.RWMutex
 
 	providers ProviderResolver
 
-	byKey       map[string]*entry        // keyStr -> entry
-	handleIndex map[string]spec.SkillKey // llmName+"\n"+path -> key
+	byKey       map[spec.SkillKey]*entry
+	handleIndex map[handleKey]spec.SkillKey
 }
 
 func New(providers ProviderResolver) *Catalog {
 	return &Catalog{
 		providers:   providers,
-		byKey:       map[string]*entry{},
-		handleIndex: map[string]spec.SkillKey{},
+		byKey:       map[spec.SkillKey]*entry{},
+		handleIndex: map[handleKey]spec.SkillKey{},
 	}
 }
 
-func keyStr(k spec.SkillKey) string {
-	return k.Type + "\n" + k.Name + "\n" + k.Path
-}
-
-func handleStr(h spec.SkillHandle) string {
-	return h.Name + "\n" + h.Path
+func normHandle(h spec.SkillHandle) handleKey {
+	return handleKey{
+		Name: strings.TrimSpace(h.Name),
+		Path: strings.TrimSpace(h.Path),
+	}
 }
 
 func (c *Catalog) Add(ctx context.Context, key spec.SkillKey) (spec.SkillRecord, error) {
@@ -76,18 +80,16 @@ func (c *Catalog) Add(ctx context.Context, key spec.SkillKey) (spec.SkillRecord,
 		return spec.SkillRecord{}, fmt.Errorf("%w: provider returned invalid record key", spec.ErrInvalidArgument)
 	}
 
-	ks := keyStr(rec.Key)
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if _, exists := c.byKey[ks]; exists {
+	if _, exists := c.byKey[rec.Key]; exists {
 		return spec.SkillRecord{}, spec.ErrSkillAlreadyExists
 	}
 
 	e := &entry{rec: rec}
 	e.bodyLoaded = strings.TrimSpace(rec.SkillMDBody) != ""
-	c.byKey[ks] = e
+	c.byKey[rec.Key] = e
 
 	c.recomputeLLMNamesLocked()
 
@@ -95,29 +97,28 @@ func (c *Catalog) Add(ctx context.Context, key spec.SkillKey) (spec.SkillRecord,
 }
 
 func (c *Catalog) Remove(key spec.SkillKey) (spec.SkillRecord, bool) {
-	ks := keyStr(key)
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	e, ok := c.byKey[ks]
+	e, ok := c.byKey[key]
+
 	if !ok {
 		return spec.SkillRecord{}, false
 	}
 
 	rec := e.rec
-	delete(c.byKey, ks)
+	delete(c.byKey, key)
 
 	c.recomputeLLMNamesLocked()
 	return rec, true
 }
 
 func (c *Catalog) Get(key spec.SkillKey) (spec.SkillRecord, bool) {
-	ks := keyStr(key)
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	e, ok := c.byKey[ks]
+	e, ok := c.byKey[key]
+
 	if !ok {
 		return spec.SkillRecord{}, false
 	}
@@ -128,17 +129,17 @@ func (c *Catalog) ResolveHandle(h spec.SkillHandle) (spec.SkillKey, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	k, ok := c.handleIndex[handleStr(h)]
+	k, ok := c.handleIndex[normHandle(h)]
+
 	return k, ok
 }
 
 func (c *Catalog) HandleForKey(key spec.SkillKey) (spec.SkillHandle, bool) {
-	ks := keyStr(key)
-
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	e, ok := c.byKey[ks]
+	e, ok := c.byKey[key]
+
 	if !ok {
 		return spec.SkillHandle{}, false
 	}
@@ -149,10 +150,10 @@ func (c *Catalog) EnsureBody(ctx context.Context, key spec.SkillKey) (string, er
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	ks := keyStr(key)
 
 	c.mu.RLock()
-	e, ok := c.byKey[ks]
+	e, ok := c.byKey[key]
+
 	if !ok {
 		c.mu.RUnlock()
 		return "", spec.ErrSkillNotFound
@@ -179,7 +180,8 @@ func (c *Catalog) EnsureBody(ctx context.Context, key spec.SkillKey) (string, er
 	defer c.mu.Unlock()
 
 	// Re-check entry still exists and only fill if empty.
-	e2, ok := c.byKey[ks]
+	e2, ok := c.byKey[key]
+
 	if !ok {
 		return "", spec.ErrSkillNotFound
 	}
@@ -217,10 +219,14 @@ func (c *Catalog) ListRecords(f Filter) []spec.SkillRecord {
 // If collision still exists, append "#<shortHash>".
 func (c *Catalog) recomputeLLMNamesLocked() {
 	// Base groups by (Name, Path) (no type).
-	groups := map[string][]*entry{}
+	type groupKey struct {
+		Name string
+		Path string
+	}
+	groups := map[groupKey][]*entry{}
 	for _, e := range c.byKey {
-		k := e.rec.Key.Name + "\n" + e.rec.Key.Path
-		groups[k] = append(groups[k], e)
+		gk := groupKey{Name: e.rec.Key.Name, Path: e.rec.Key.Path}
+		groups[gk] = append(groups[gk], e)
 	}
 
 	// First pass: default or type-prefixed within collision groups.
@@ -238,23 +244,24 @@ func (c *Catalog) recomputeLLMNamesLocked() {
 	// Second pass: ensure uniqueness on (llmName, path).
 	count := map[string]int{}
 	for _, e := range c.byKey {
-		count[e.llmName+"\n"+e.rec.Key.Path]++
+		count[e.llmName+"\x00"+e.rec.Key.Path]++
 	}
 	for _, e := range c.byKey {
-		k := e.llmName + "\n" + e.rec.Key.Path
+		k := e.llmName + "\x00" + e.rec.Key.Path
+
 		if count[k] > 1 {
 			e.llmName = fmt.Sprintf("%s:%s#%s", e.rec.Key.Type, e.rec.Key.Name, shortHash(e.rec.Key))
 		}
 	}
 
 	// Rebuild handle index.
-	c.handleIndex = map[string]spec.SkillKey{}
+	c.handleIndex = map[handleKey]spec.SkillKey{}
 	for _, e := range c.byKey {
-		c.handleIndex[e.llmName+"\n"+e.rec.Key.Path] = e.rec.Key
+		c.handleIndex[handleKey{Name: e.llmName, Path: e.rec.Key.Path}] = e.rec.Key
 	}
 }
 
 func shortHash(k spec.SkillKey) string {
-	sum := sha256.Sum256([]byte(keyStr(k)))
+	sum := sha256.Sum256([]byte(k.Type + "\x00" + k.Name + "\x00" + k.Path))
 	return hex.EncodeToString(sum[:])[:8]
 }

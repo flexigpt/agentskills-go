@@ -115,8 +115,6 @@ func (st *Store) Delete(id string) {
 
 // PruneSkill removes the given key from all sessions' active lists.
 func (st *Store) PruneSkill(key spec.SkillKey) {
-	ks := key.Type + "\n" + key.Name + "\n" + key.Path
-
 	st.mu.Lock()
 	defer st.mu.Unlock()
 
@@ -125,7 +123,7 @@ func (st *Store) PruneSkill(key spec.SkillKey) {
 		if it == nil || it.s == nil || it.s.closed.Load() {
 			continue
 		}
-		it.s.pruneKey(ks)
+		it.s.pruneKey(key)
 	}
 }
 

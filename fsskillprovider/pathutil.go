@@ -25,6 +25,10 @@ func joinUnderRoot(root, rel string) (string, error) {
 	if strings.ContainsRune(rel, '\x00') {
 		return "", errors.New("path contains NUL byte")
 	}
+	// Windows-specific: reject drive/UNC-like relative paths such as "C:foo".
+	if isWindows() && filepath.VolumeName(rel) != "" {
+		return "", errors.New("path must be a pure relative path (no volume name)")
+	}
 	if filepath.IsAbs(rel) {
 		return "", errors.New("path must be relative")
 	}
@@ -75,7 +79,7 @@ func relIsUnderDir(rel, underDir string) bool {
 		return false
 	}
 	c := filepath.Clean(rel)
-	parts := strings.Split(c, string(os.PathSeparator))
+	parts := strings.FieldsFunc(c, func(r rune) bool { return r == '/' || r == '\\' })
 	if len(parts) == 0 {
 		return false
 	}
