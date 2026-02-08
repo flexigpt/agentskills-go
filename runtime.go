@@ -149,7 +149,11 @@ func (r *Runtime) NewSession(ctx context.Context) (spec.SessionID, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	return spec.SessionID(r.sessions.NewSessionID()), nil
+	id, err := r.sessions.NewSession()
+	if err != nil {
+		return "", err
+	}
+	return spec.SessionID(id), nil
 }
 
 func (r *Runtime) CloseSession(ctx context.Context, sid spec.SessionID) error {

@@ -2,6 +2,7 @@ package session
 
 import (
 	"container/list"
+	"fmt"
 	"sync"
 	"time"
 
@@ -54,7 +55,7 @@ func NewStore(cfg StoreConfig) *Store {
 	}
 }
 
-func (st *Store) NewSessionID() string {
+func (st *Store) NewSession() (string, error) {
 	now := time.Now()
 
 	st.mu.Lock()
@@ -63,7 +64,11 @@ func (st *Store) NewSessionID() string {
 	st.evictExpiredLocked(now)
 	st.evictOverLimitLocked()
 
-	id := uuid.Must(uuid.NewV7()).String()
+	u, err := uuid.NewV7()
+	if err != nil {
+		return "", fmt.Errorf("new session id: %w", err)
+	}
+	id := u.String()
 	s := newSession(SessionConfig{
 		ID:                  id,
 		Catalog:             st.cfg.Catalog,
@@ -77,7 +82,7 @@ func (st *Store) NewSessionID() string {
 
 	st.evictOverLimitLocked()
 
-	return id
+	return id, nil
 }
 
 func (st *Store) Get(id string) (*Session, bool) {

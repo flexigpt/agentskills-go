@@ -21,6 +21,11 @@ type entry struct {
 	rec        spec.SkillRecord
 	bodyLoaded bool
 	llmName    string
+
+	// "bodyWait" is non-nil while a LoadBody call is in-flight for this entry. It is closed when loading finishes
+	// (success or failure).
+	bodyWait chan struct{}
+	bodyErr  error
 }
 
 type handleKey struct {
@@ -56,6 +61,7 @@ func (c *Catalog) Add(ctx context.Context, key spec.SkillKey) (spec.SkillRecord,
 	if err := ctx.Err(); err != nil {
 		return spec.SkillRecord{}, err
 	}
+
 	if strings.TrimSpace(key.Type) == "" || strings.TrimSpace(key.Name) == "" || strings.TrimSpace(key.Path) == "" {
 		return spec.SkillRecord{}, fmt.Errorf(
 			"%w: key.type, key.name, and key.path are required",
@@ -75,6 +81,17 @@ func (c *Catalog) Add(ctx context.Context, key spec.SkillKey) (spec.SkillRecord,
 	if err != nil {
 		return spec.SkillRecord{}, err
 	}
+
+	// Provider is allowed to normalize Path, but must not change Type/Name identity.
+	if rec.Key.Type != key.Type {
+		return spec.SkillRecord{}, fmt.Errorf("%w: provider changed key.type from %q to %q",
+			spec.ErrInvalidArgument, key.Type, rec.Key.Type)
+	}
+	if rec.Key.Name != key.Name {
+		return spec.SkillRecord{}, fmt.Errorf("%w: provider changed key.name from %q to %q",
+			spec.ErrInvalidArgument, key.Name, rec.Key.Name)
+	}
+
 	if strings.TrimSpace(rec.Key.Type) == "" || strings.TrimSpace(rec.Key.Name) == "" ||
 		strings.TrimSpace(rec.Key.Path) == "" {
 		return spec.SkillRecord{}, fmt.Errorf("%w: provider returned invalid record key", spec.ErrInvalidArgument)
@@ -88,7 +105,9 @@ func (c *Catalog) Add(ctx context.Context, key spec.SkillKey) (spec.SkillRecord,
 	}
 
 	e := &entry{rec: rec}
-	e.bodyLoaded = strings.TrimSpace(rec.SkillMDBody) != ""
+	// If a provider pre-populates SkillMDBody we treat it as already loaded,
+	// even if it's an empty string (rare but valid).
+	e.bodyLoaded = true && rec.SkillMDBody != "" // explicit intent
 	c.byKey[rec.Key] = e
 
 	c.recomputeLLMNamesLocked()
@@ -104,6 +123,12 @@ func (c *Catalog) Remove(key spec.SkillKey) (spec.SkillRecord, bool) {
 
 	if !ok {
 		return spec.SkillRecord{}, false
+	}
+
+	// Wake any waiters to avoid deadlocks if Remove races EnsureBody.
+	if ch := e.bodyWait; ch != nil {
+		e.bodyWait = nil
+		close(ch)
 	}
 
 	rec := e.rec
@@ -150,46 +175,49 @@ func (c *Catalog) EnsureBody(ctx context.Context, key spec.SkillKey) (string, er
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	for range 5 {
+		c.mu.Lock()
+		e, ok := c.byKey[key]
+		if !ok {
+			c.mu.Unlock()
+			return "", spec.ErrSkillNotFound
+		}
+		if e.bodyLoaded {
+			body := e.rec.SkillMDBody
+			c.mu.Unlock()
+			return body, nil
+		}
+		if e.bodyErr != nil {
+			err := e.bodyErr
+			c.mu.Unlock()
+			return "", err
+		}
+		if ch := e.bodyWait; ch != nil {
+			// Someone else is loading.
+			c.mu.Unlock()
+			<-ch
+			continue
+		}
 
-	c.mu.RLock()
-	e, ok := c.byKey[key]
+		// Become the loader.
+		ch := make(chan struct{})
+		e.bodyWait = ch
+		recKey := e.rec.Key
+		c.mu.Unlock()
+		p, ok := c.providers.Provider(recKey.Type)
+		if !ok || p == nil {
+			c.finishBodyLoad(key, ch, "", spec.ErrProviderNotFound)
+			return "", spec.ErrProviderNotFound
+		}
 
-	if !ok {
-		c.mu.RUnlock()
-		return "", spec.ErrSkillNotFound
-	}
-	if e.bodyLoaded && strings.TrimSpace(e.rec.SkillMDBody) != "" {
-		body := e.rec.SkillMDBody
-		c.mu.RUnlock()
+		body, err := p.LoadBody(ctx, recKey)
+		c.finishBodyLoad(key, ch, body, err)
+		if err != nil {
+			return "", err
+		}
 		return body, nil
 	}
-	recKey := e.rec.Key
-	c.mu.RUnlock()
-
-	p, ok := c.providers.Provider(recKey.Type)
-	if !ok || p == nil {
-		return "", spec.ErrProviderNotFound
-	}
-
-	body, err := p.LoadBody(ctx, recKey)
-	if err != nil {
-		return "", err
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Re-check entry still exists and only fill if empty.
-	e2, ok := c.byKey[key]
-
-	if !ok {
-		return "", spec.ErrSkillNotFound
-	}
-	if strings.TrimSpace(e2.rec.SkillMDBody) == "" {
-		e2.rec.SkillMDBody = body
-	}
-	e2.bodyLoaded = true
-	return e2.rec.SkillMDBody, nil
+	return "", errors.New("could not ensure skill body")
 }
 
 func (c *Catalog) ListRecords(f Filter) []spec.SkillRecord {
@@ -258,6 +286,31 @@ func (c *Catalog) recomputeLLMNamesLocked() {
 	c.handleIndex = map[handleKey]spec.SkillKey{}
 	for _, e := range c.byKey {
 		c.handleIndex[handleKey{Name: e.llmName, Path: e.rec.Key.Path}] = e.rec.Key
+	}
+}
+
+func (c *Catalog) finishBodyLoad(key spec.SkillKey, ch chan struct{}, body string, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.byKey[key]
+	if ok {
+		// Close only if still the same in-flight channel.
+		if e.bodyWait == ch {
+			e.bodyWait = nil
+			close(ch)
+		}
+		if err != nil {
+			e.bodyErr = err
+			return
+		}
+		e.rec.SkillMDBody = body
+		e.bodyLoaded = true
+		e.bodyErr = nil
+		return
+	}
+	// Entry removed: still close channel to wake waiters.
+	if ch != nil {
+		close(ch)
 	}
 }
 
