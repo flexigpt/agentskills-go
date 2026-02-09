@@ -265,25 +265,25 @@ func (p *Provider) RunScript(
 	args []string,
 	env map[string]string,
 	workdir string,
-) (spec.RunScriptResult, error) {
+) (spec.RunScriptOut, error) {
 	if err := ctx.Err(); err != nil {
-		return spec.RunScriptResult{}, err
+		return spec.RunScriptOut{}, err
 	}
 	if key.Type != Type {
-		return spec.RunScriptResult{}, fmt.Errorf("%w: wrong provider type: %q", spec.ErrInvalidArgument, key.Type)
+		return spec.RunScriptOut{}, fmt.Errorf("%w: wrong provider type: %q", spec.ErrInvalidArgument, key.Type)
 	}
 	if !p.runScriptsEnabled {
-		return spec.RunScriptResult{}, spec.ErrRunScriptUnsupported
+		return spec.RunScriptOut{}, spec.ErrRunScriptUnsupported
 	}
 
 	root, err := canonicalRoot(key.Path)
 	if err != nil {
-		return spec.RunScriptResult{}, err
+		return spec.RunScriptOut{}, err
 	}
 
 	sp := strings.TrimSpace(scriptPath)
 	if sp == "" {
-		return spec.RunScriptResult{}, fmt.Errorf("%w: script path is required", spec.ErrInvalidArgument)
+		return spec.RunScriptOut{}, fmt.Errorf("%w: script path is required", spec.ErrInvalidArgument)
 	}
 
 	et, err := exectool.NewExecTool(
@@ -293,7 +293,7 @@ func (p *Provider) RunScript(
 		exectool.WithRunScriptPolicy(p.runScriptPolicy),
 	)
 	if err != nil {
-		return spec.RunScriptResult{}, err
+		return spec.RunScriptOut{}, err
 	}
 
 	res, err := et.RunScript(ctx, exectool.RunScriptArgs{
@@ -303,12 +303,12 @@ func (p *Provider) RunScript(
 		Workdir: workdir,
 	})
 	if err != nil {
-		return spec.RunScriptResult{}, err
+		return spec.RunScriptOut{}, err
 	}
 	if res == nil {
-		return spec.RunScriptResult{}, errors.New("runscript returned nil result")
+		return spec.RunScriptOut{}, errors.New("runscript returned nil result")
 	}
-	return spec.RunScriptResult{
+	return spec.RunScriptOut{
 		Path:       sp, // keep skill-relative path in receipt
 		ExitCode:   res.ExitCode,
 		Stdout:     res.Stdout,

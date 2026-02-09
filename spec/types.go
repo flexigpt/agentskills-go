@@ -51,7 +51,7 @@ type LoadArgs struct {
 	Mode   LoadMode      `json:"mode,omitempty"` // default: replace
 }
 
-type LoadResult struct {
+type LoadOut struct {
 	ActiveSkills []SkillHandle `json:"active_skills"`
 }
 
@@ -60,7 +60,7 @@ type UnloadArgs struct {
 	All    bool          `json:"all,omitempty"`
 }
 
-type UnloadResult struct {
+type UnloadOut struct {
 	ActiveSkills []SkillHandle `json:"active_skills"`
 }
 
@@ -85,7 +85,7 @@ type RunScriptArgs struct {
 	Workdir string            `json:"workdir,omitempty"` // relative; default provider-specific (fs: base root)
 }
 
-type RunScriptResult struct {
+type RunScriptOut struct {
 	Path       string `json:"path"`
 	ExitCode   int    `json:"exit_code"`
 	Stdout     string `json:"stdout,omitempty"`
@@ -122,5 +122,5 @@ type SkillProvider interface {
 		args []string,
 		env map[string]string,
 		workdir string,
-	) (RunScriptResult, error)
+	) (RunScriptOut, error)
 }

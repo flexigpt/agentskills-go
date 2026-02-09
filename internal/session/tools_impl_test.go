@@ -62,16 +62,16 @@ func (p *recordingProvider) RunScript(
 	args []string,
 	env map[string]string,
 	workdir string,
-) (spec.RunScriptResult, error) {
+) (spec.RunScriptOut, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.runCalls++
 	p.lastRunKey = key
 	p.lastRunPath = scriptPath
 	if p.runReturnError != nil {
-		return spec.RunScriptResult{}, p.runReturnError
+		return spec.RunScriptOut{}, p.runReturnError
 	}
-	return spec.RunScriptResult{Path: scriptPath, ExitCode: 0}, nil
+	return spec.RunScriptOut{Path: scriptPath, ExitCode: 0}, nil
 }
 
 func TestTools_Read_DefaultSkillSelection(t *testing.T) {

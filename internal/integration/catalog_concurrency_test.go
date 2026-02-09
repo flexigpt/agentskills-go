@@ -56,8 +56,8 @@ func (p *blockingProvider) RunScript(
 	args []string,
 	env map[string]string,
 	workdir string,
-) (spec.RunScriptResult, error) {
-	return spec.RunScriptResult{}, spec.ErrRunScriptUnsupported
+) (spec.RunScriptOut, error) {
+	return spec.RunScriptOut{}, spec.ErrRunScriptUnsupported
 }
 
 func TestCatalog_EnsureBody_WaitHonorsContext_AndRemoveDoesNotPanic(t *testing.T) {

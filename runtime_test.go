@@ -24,7 +24,7 @@ type fakeProvider struct {
 	indexFn    func(context.Context, spec.SkillKey) (spec.SkillRecord, error)
 	loadBodyFn func(context.Context, spec.SkillKey) (string, error)
 	readFn     func(context.Context, spec.SkillKey, string, spec.ReadEncoding) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error)
-	runFn      func(context.Context, spec.SkillKey, string, []string, map[string]string, string) (spec.RunScriptResult, error)
+	runFn      func(context.Context, spec.SkillKey, string, []string, map[string]string, string) (spec.RunScriptOut, error)
 }
 
 func (p *fakeProvider) Type() string { return p.typ }
@@ -64,11 +64,11 @@ func (p *fakeProvider) RunScript(
 	args []string,
 	env map[string]string,
 	workdir string,
-) (spec.RunScriptResult, error) {
+) (spec.RunScriptOut, error) {
 	if p.runFn != nil {
 		return p.runFn(ctx, key, scriptPath, args, env, workdir)
 	}
-	return spec.RunScriptResult{}, spec.ErrRunScriptUnsupported
+	return spec.RunScriptOut{}, spec.ErrRunScriptUnsupported
 }
 
 func TestNew_RuntimeOptionsValidation(t *testing.T) {

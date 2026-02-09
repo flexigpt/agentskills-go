@@ -63,8 +63,8 @@ func (p *provider) RunScript(
 	args []string,
 	env map[string]string,
 	workdir string,
-) (spec.RunScriptResult, error) {
-	return spec.RunScriptResult{}, spec.ErrRunScriptUnsupported
+) (spec.RunScriptOut, error) {
+	return spec.RunScriptOut{}, spec.ErrRunScriptUnsupported
 }
 
 func TestCatalog_AddValidationAndProviderErrors(t *testing.T) {

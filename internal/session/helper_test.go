@@ -121,6 +121,6 @@ func (p *canonProvider) RunScript(
 	args []string,
 	env map[string]string,
 	workdir string,
-) (spec.RunScriptResult, error) {
-	return spec.RunScriptResult{}, spec.ErrRunScriptUnsupported
+) (spec.RunScriptOut, error) {
+	return spec.RunScriptOut{}, spec.ErrRunScriptUnsupported
 }

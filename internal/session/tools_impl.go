@@ -33,23 +33,23 @@ func (s *Session) NewRegistry(opts ...llmtools.RegistryOption) (*llmtools.Regist
 	return r, nil
 }
 
-func (s *Session) toolLoad(ctx context.Context, args spec.LoadArgs) (spec.LoadResult, error) {
+func (s *Session) toolLoad(ctx context.Context, args spec.LoadArgs) (spec.LoadOut, error) {
 	if err := ctx.Err(); err != nil {
-		return spec.LoadResult{}, err
+		return spec.LoadOut{}, err
 	}
 	s.touchSession()
 	if s.isClosed() {
-		return spec.LoadResult{}, spec.ErrSessionNotFound
+		return spec.LoadOut{}, spec.ErrSessionNotFound
 	}
 	mode := args.Mode
 	if strings.TrimSpace(string(mode)) == "" {
 		mode = spec.LoadModeReplace
 	}
 	if mode != spec.LoadModeReplace && mode != spec.LoadModeAdd {
-		return spec.LoadResult{}, fmt.Errorf("%w: mode must be 'replace' or 'add'", spec.ErrInvalidArgument)
+		return spec.LoadOut{}, fmt.Errorf("%w: mode must be 'replace' or 'add'", spec.ErrInvalidArgument)
 	}
 	if len(args.Skills) == 0 {
-		return spec.LoadResult{}, fmt.Errorf("%w: skills is required", spec.ErrInvalidArgument)
+		return spec.LoadOut{}, fmt.Errorf("%w: skills is required", spec.ErrInvalidArgument)
 	}
 
 	// Resolve handles -> internal keys (dedupe).
@@ -58,11 +58,11 @@ func (s *Session) toolLoad(ctx context.Context, args spec.LoadArgs) (spec.LoadRe
 
 	for _, h := range args.Skills {
 		if strings.TrimSpace(h.Name) == "" || strings.TrimSpace(h.Path) == "" {
-			return spec.LoadResult{}, fmt.Errorf("%w: each skill requires name and path", spec.ErrInvalidArgument)
+			return spec.LoadOut{}, fmt.Errorf("%w: each skill requires name and path", spec.ErrInvalidArgument)
 		}
 		k, ok := s.catalog.ResolveHandle(h)
 		if !ok {
-			return spec.LoadResult{}, fmt.Errorf("%w: unknown skill handle: %+v", spec.ErrSkillNotFound, h)
+			return spec.LoadOut{}, fmt.Errorf("%w: unknown skill handle: %+v", spec.ErrSkillNotFound, h)
 		}
 		if _, ok := seen[k]; ok {
 			continue
@@ -74,21 +74,21 @@ func (s *Session) toolLoad(ctx context.Context, args spec.LoadArgs) (spec.LoadRe
 
 	handles, err := s.ActivateKeys(ctx, reqKeys, mode)
 	if err != nil {
-		return spec.LoadResult{}, err
+		return spec.LoadOut{}, err
 	}
-	return spec.LoadResult{ActiveSkills: handles}, nil
+	return spec.LoadOut{ActiveSkills: handles}, nil
 }
 
-func (s *Session) toolUnload(ctx context.Context, args spec.UnloadArgs) (spec.UnloadResult, error) {
+func (s *Session) toolUnload(ctx context.Context, args spec.UnloadArgs) (spec.UnloadOut, error) {
 	if err := ctx.Err(); err != nil {
-		return spec.UnloadResult{}, err
+		return spec.UnloadOut{}, err
 	}
 	s.touchSession()
 	if s.isClosed() {
-		return spec.UnloadResult{}, spec.ErrSessionNotFound
+		return spec.UnloadOut{}, spec.ErrSessionNotFound
 	}
 	if !args.All && len(args.Skills) == 0 {
-		return spec.UnloadResult{}, fmt.Errorf("%w: skills is required unless all=true", spec.ErrInvalidArgument)
+		return spec.UnloadOut{}, fmt.Errorf("%w: skills is required unless all=true", spec.ErrInvalidArgument)
 	}
 
 	if args.All {
@@ -101,9 +101,9 @@ func (s *Session) toolUnload(ctx context.Context, args spec.UnloadArgs) (spec.Un
 		handles, err := s.activeHandlesLocked()
 		s.mu.Unlock()
 		if err != nil {
-			return spec.UnloadResult{}, err
+			return spec.UnloadOut{}, err
 		}
-		return spec.UnloadResult{ActiveSkills: handles}, nil
+		return spec.UnloadOut{ActiveSkills: handles}, nil
 	}
 
 	// Resolve handles to keys.
@@ -111,11 +111,11 @@ func (s *Session) toolUnload(ctx context.Context, args spec.UnloadArgs) (spec.Un
 
 	for _, h := range args.Skills {
 		if strings.TrimSpace(h.Name) == "" || strings.TrimSpace(h.Path) == "" {
-			return spec.UnloadResult{}, fmt.Errorf("%w: each skill requires name and path", spec.ErrInvalidArgument)
+			return spec.UnloadOut{}, fmt.Errorf("%w: each skill requires name and path", spec.ErrInvalidArgument)
 		}
 		k, ok := s.catalog.ResolveHandle(h)
 		if !ok {
-			return spec.UnloadResult{}, fmt.Errorf("%w: unknown skill handle: %+v", spec.ErrSkillNotFound, h)
+			return spec.UnloadOut{}, fmt.Errorf("%w: unknown skill handle: %+v", spec.ErrSkillNotFound, h)
 		}
 		rm[k] = struct{}{}
 
@@ -144,9 +144,9 @@ func (s *Session) toolUnload(ctx context.Context, args spec.UnloadArgs) (spec.Un
 
 	handles, err := s.activeHandlesLocked()
 	if err != nil {
-		return spec.UnloadResult{}, err
+		return spec.UnloadOut{}, err
 	}
-	return spec.UnloadResult{ActiveSkills: handles}, nil
+	return spec.UnloadOut{ActiveSkills: handles}, nil
 }
 
 func (s *Session) toolRead(ctx context.Context, args spec.ReadArgs) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
@@ -189,24 +189,24 @@ func (s *Session) toolRead(ctx context.Context, args spec.ReadArgs) ([]llmtoolsg
 	return p.ReadResource(ctx, k, args.Path, enc)
 }
 
-func (s *Session) toolRunScript(ctx context.Context, args spec.RunScriptArgs) (spec.RunScriptResult, error) {
+func (s *Session) toolRunScript(ctx context.Context, args spec.RunScriptArgs) (spec.RunScriptOut, error) {
 	if err := ctx.Err(); err != nil {
-		return spec.RunScriptResult{}, err
+		return spec.RunScriptOut{}, err
 	}
 	s.touchSession()
 	if s.isClosed() {
-		return spec.RunScriptResult{}, spec.ErrSessionNotFound
+		return spec.RunScriptOut{}, spec.ErrSessionNotFound
 	}
 	if strings.TrimSpace(args.Skill.Name) == "" || strings.TrimSpace(args.Skill.Path) == "" {
-		return spec.RunScriptResult{}, fmt.Errorf("%w: skill.name and skill.path are required", spec.ErrInvalidArgument)
+		return spec.RunScriptOut{}, fmt.Errorf("%w: skill.name and skill.path are required", spec.ErrInvalidArgument)
 	}
 	if strings.TrimSpace(args.Path) == "" {
-		return spec.RunScriptResult{}, fmt.Errorf("%w: path is required", spec.ErrInvalidArgument)
+		return spec.RunScriptOut{}, fmt.Errorf("%w: path is required", spec.ErrInvalidArgument)
 	}
 
 	k, ok := s.catalog.ResolveHandle(args.Skill)
 	if !ok {
-		return spec.RunScriptResult{}, fmt.Errorf("%w: unknown skill handle: %+v", spec.ErrSkillNotFound, args.Skill)
+		return spec.RunScriptOut{}, fmt.Errorf("%w: unknown skill handle: %+v", spec.ErrSkillNotFound, args.Skill)
 	}
 
 	s.mu.Lock()
@@ -214,12 +214,12 @@ func (s *Session) toolRunScript(ctx context.Context, args spec.RunScriptArgs) (s
 
 	s.mu.Unlock()
 	if !active {
-		return spec.RunScriptResult{}, spec.ErrSkillNotActive
+		return spec.RunScriptOut{}, spec.ErrSkillNotActive
 	}
 
 	p, ok := s.providers.Provider(k.Type)
 	if !ok || p == nil {
-		return spec.RunScriptResult{}, spec.ErrProviderNotFound
+		return spec.RunScriptOut{}, spec.ErrProviderNotFound
 	}
 
 	return p.RunScript(ctx, k, args.Path, args.Args, args.Env, args.Workdir)
