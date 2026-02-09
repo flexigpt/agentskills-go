@@ -2,15 +2,15 @@ package fsskillprovider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
-	"time"
 
+	"github.com/flexigpt/llmtools-go/exectool"
 	"github.com/flexigpt/llmtools-go/fstool"
-	"github.com/flexigpt/llmtools-go/shelltool"
 	llmtoolsgoSpec "github.com/flexigpt/llmtools-go/spec"
 
 	"github.com/flexigpt/agentskills-go/spec"
@@ -19,8 +19,8 @@ import (
 const Type = "fs"
 
 var (
-	defaultAllowedScriptsExtensionWin    = map[string]struct{}{".ps1": {}, ".py": {}}
-	defaultAllowedScriptsExtensionNonWin = map[string]struct{}{".sh": {}, ".py": {}}
+	defaultAllowedScriptsExtensionWin    = []string{".ps1", ".py"}
+	defaultAllowedScriptsExtensionNonWin = []string{".sh", ".py"}
 )
 
 type Option func(*Provider) error
@@ -33,8 +33,18 @@ func WithRunScripts(enabled bool) Option {
 	}
 }
 
-// WithRunScriptPolicy configures the shelltool policy used for RunScript.
-func WithRunScriptPolicy(policy shelltool.ShellCommandPolicy) Option {
+// WithExecutionPolicy configures the exectool execution policy (timeouts/output caps/etc).
+func WithExecutionPolicy(policy exectool.ExecutionPolicy) Option {
+	return func(p *Provider) error {
+		p.execPolicy = policy
+		return nil
+	}
+}
+
+// WithRunScriptPolicy configures exectool's RunScriptPolicy.
+// NOTE: This is a *tool policy*. The provider does not implement hardening itself; it delegates
+// to llmtools-go/exectool. This option just configures that tool.
+func WithRunScriptPolicy(policy exectool.RunScriptPolicy) Option {
 	return func(p *Provider) error {
 		p.runScriptPolicy = policy
 		return nil
@@ -42,12 +52,13 @@ func WithRunScriptPolicy(policy shelltool.ShellCommandPolicy) Option {
 }
 
 // WithAllowedScriptExtensions restricts which script extensions may be executed.
+// This configures exectool.RunScriptPolicy.AllowedExtensions.
 // Defaults:
-//   - Windows: [".ps1"]
-//   - non-Windows: [".sh"]
+//   - Windows: [".ps1", ".py"]
+//   - non-Windows: [".sh", ".py"]
 func WithAllowedScriptExtensions(exts []string) Option {
 	return func(p *Provider) error {
-		m := map[string]struct{}{}
+		out := make([]string, 0, len(exts))
 		for _, e := range exts {
 			e = strings.ToLower(strings.TrimSpace(e))
 			if e == "" {
@@ -56,23 +67,27 @@ func WithAllowedScriptExtensions(exts []string) Option {
 			if !strings.HasPrefix(e, ".") {
 				e = "." + e
 			}
-			m[e] = struct{}{}
+
+			out = append(out, e)
 		}
-		p.allowedScriptExt = m
+
+		p.allowedScriptExt = out
 		return nil
 	}
 }
 
 type Provider struct {
 	runScriptsEnabled bool
-	runScriptPolicy   shelltool.ShellCommandPolicy
-	allowedScriptExt  map[string]struct{}
+	execPolicy        exectool.ExecutionPolicy
+	runScriptPolicy   exectool.RunScriptPolicy
+	allowedScriptExt  []string
 }
 
 func New(opts ...Option) (*Provider, error) {
 	p := &Provider{
 		runScriptsEnabled: false,
-		runScriptPolicy:   shelltool.DefaultShellCommandPolicy,
+		execPolicy:        exectool.DefaultExecutionPolicy,
+		runScriptPolicy:   exectool.DefaultRunScriptPolicy,
 		allowedScriptExt:  nil,
 	}
 	for _, o := range opts {
@@ -84,13 +99,15 @@ func New(opts ...Option) (*Provider, error) {
 		}
 	}
 	// Defaults if unset.
-	if p.allowedScriptExt == nil {
+	if len(p.allowedScriptExt) == 0 {
 		if isWindows() {
 			p.allowedScriptExt = defaultAllowedScriptsExtensionWin
 		} else {
 			p.allowedScriptExt = defaultAllowedScriptsExtensionNonWin
 		}
 	}
+	// Apply default/option-based extension restrictions to the tool policy.
+	p.runScriptPolicy.AllowedExtensions = append([]string(nil), p.allowedScriptExt...)
 	return p, nil
 }
 
@@ -173,14 +190,8 @@ func (p *Provider) ReadResource(
 		return nil, err
 	}
 
-	rel := strings.TrimSpace(resourcePath)
-	if rel == "" {
+	if strings.TrimSpace(resourcePath) == "" {
 		return nil, fmt.Errorf("%w: resource path is required", spec.ErrInvalidArgument)
-	}
-
-	abs, err := joinUnderRoot(root, rel)
-	if err != nil {
-		return nil, err
 	}
 
 	enc := encoding
@@ -193,10 +204,20 @@ func (p *Provider) ReadResource(
 		return nil, fmt.Errorf("%w: unknown encoding: %q", spec.ErrInvalidArgument, enc)
 	}
 
-	return fstool.ReadFile(ctx, fstool.ReadFileArgs{
-		Path:     abs,
-		Encoding: string(enc),
-	})
+	// Hardening is delegated to llmtools-go/fstool (readfile):
+	//   - path normalization and allowedRoots sandbox checks
+	//   - refuse symlink traversal (file and parent dirs)
+	//   - file size cap + MIME/text/binary handling (+ safe PDF text extraction)
+	//
+	// Provider responsibility: scope reads to the skill root dir.
+	ft, err := fstool.NewFSTool(
+		fstool.WithAllowedRoots([]string{root}),
+		fstool.WithWorkBaseDir(root),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return ft.ReadFile(ctx, fstool.ReadFileArgs{Path: resourcePath, Encoding: string(enc)})
 }
 
 func (p *Provider) RunScript(
@@ -226,101 +247,45 @@ func (p *Provider) RunScript(
 	if sp == "" {
 		return spec.RunScriptResult{}, fmt.Errorf("%w: script path is required", spec.ErrInvalidArgument)
 	}
-
-	// Provider-enforced constraint: script must be under scripts.
-	if !relIsUnderDir(sp, "scripts") {
-		return spec.RunScriptResult{}, fmt.Errorf(
-			"%w: script path must be under scripts/: %q",
-			spec.ErrInvalidArgument,
-			sp,
-		)
-	}
-
-	// Resolve script path with symlink-hardening: resolved path must remain under root.
-	scriptAbs, err := resolveExistingPathUnderRoot(root, sp)
-	if err != nil {
-		return spec.RunScriptResult{}, err
-	}
-
-	ext := strings.ToLower(filepath.Ext(scriptAbs))
-	if _, ok := p.allowedScriptExt[ext]; !ok {
-		return spec.RunScriptResult{}, fmt.Errorf(
-			"%w: script extension %q is not allowed",
-			spec.ErrInvalidArgument,
-			ext,
-		)
-	}
-
-	// Disallow the script file itself being a symlink.
-	if lst, lerr := os.Lstat(filepath.Join(root, filepath.Clean(sp))); lerr == nil {
-		if lst.Mode()&os.ModeSymlink != 0 {
-			return spec.RunScriptResult{}, fmt.Errorf(
-				"%w: script must not be a symlink: %q",
-				spec.ErrInvalidArgument,
-				sp,
-			)
-		}
-	}
-
-	wd := strings.TrimSpace(workdir)
-	var workdirAbs string
-	switch wd {
-	case "", ".":
-		workdirAbs = root
-	default:
-		workdirAbs, err = resolveExistingDirUnderRoot(root, wd)
-		if err != nil {
-			return spec.RunScriptResult{}, err
-		}
-	}
-	// Validate args (avoid NUL bytes and extremely large args).
-	for i, a := range args {
-		if strings.ContainsRune(a, '\x00') {
-			return spec.RunScriptResult{}, fmt.Errorf("%w: args[%d] contains NUL byte", spec.ErrInvalidArgument, i)
-		}
-		if len(a) > 16*1024 {
-			return spec.RunScriptResult{}, fmt.Errorf("%w: args[%d] too long", spec.ErrInvalidArgument, i)
-		}
-	}
-
-	shellName, cmdStr, err := buildScriptCommand(scriptAbs, args)
-	if err != nil {
-		return spec.RunScriptResult{}, err
-	}
-
-	st, err := shelltool.NewShellTool(
-		shelltool.WithShellAllowedWorkdirRoots([]string{root}),
-		shelltool.WithShellCommandPolicy(p.runScriptPolicy),
-		// We don't need shelltool sessions for this use-case.
-		shelltool.WithShellMaxSessions(8),
-		shelltool.WithShellSessionTTL(30*time.Minute), // harmless even if unused
-
+	// Hardening is delegated to llmtools-go/exectool (runscript):
+	//   - path normalization + allowedRoots sandbox checks
+	//   - refuse symlink traversal in workdir/script path
+	//   - env + args validation/limits
+	//   - interpreter selection by extension + safe quoting
+	//   - timeouts/output caps + process-tree termination
+	//   - dangerous command blocklist + optional heuristics
+	//
+	// Provider responsibility: scope execution to the skill root dir via allowedRoots=[root].
+	et, err := exectool.NewExecTool(
+		exectool.WithAllowedRoots([]string{root}),
+		exectool.WithWorkBaseDir(root),
+		exectool.WithExecutionPolicy(p.execPolicy),
+		exectool.WithRunScriptPolicy(p.runScriptPolicy),
 	)
 	if err != nil {
 		return spec.RunScriptResult{}, err
 	}
 
-	resp, err := st.Run(ctx, shelltool.ShellCommandArgs{
-		Commands:  []string{cmdStr},
-		Workdir:   workdirAbs,
-		Env:       env,
-		Shell:     shellName,
-		SessionID: "",
+	res, err := et.RunScript(ctx, exectool.RunScriptArgs{
+		Path:    sp,
+		Args:    args,
+		Env:     env,
+		Workdir: workdir,
 	})
 	if err != nil {
 		return spec.RunScriptResult{}, err
 	}
-
-	out := spec.RunScriptResult{Path: sp}
-	if resp != nil && len(resp.Results) > 0 {
-		r0 := resp.Results[0]
-		out.ExitCode = r0.ExitCode
-		out.Stdout = r0.Stdout
-		out.Stderr = r0.Stderr
-		out.TimedOut = r0.TimedOut
-		out.DurationMS = r0.DurationMS
+	if res == nil {
+		return spec.RunScriptResult{}, errors.New("runscript returned nil result")
 	}
-	return out, nil
+	return spec.RunScriptResult{
+		Path:       sp, // keep skill-relative path in receipt
+		ExitCode:   res.ExitCode,
+		Stdout:     res.Stdout,
+		Stderr:     res.Stderr,
+		TimedOut:   res.TimedOut,
+		DurationMS: res.DurationMS,
+	}, nil
 }
 
 func canonicalRoot(p string) (string, error) {
@@ -347,120 +312,4 @@ func canonicalRoot(p string) (string, error) {
 	return abs, nil
 }
 
-// resolveExistingPathUnderRoot resolves rel under root, follows symlinks, and ensures the final
-// resolved path remains within root.
-func resolveExistingPathUnderRoot(root, rel string) (string, error) {
-	cand, err := joinUnderRoot(root, rel)
-	if err != nil {
-		return "", err
-	}
-	resolved, err := filepath.EvalSymlinks(cand)
-	if err != nil {
-		return "", err
-	}
-	ok, err := withinRoot(root, resolved)
-	if err != nil {
-		return "", err
-	}
-	if !ok {
-		return "", fmt.Errorf("%w: path escapes root via symlink: %q", spec.ErrInvalidArgument, rel)
-	}
-	st, err := os.Stat(resolved)
-	if err != nil {
-		return "", err
-	}
-	if st.IsDir() {
-		return "", fmt.Errorf("%w: expected file, got directory: %q", spec.ErrInvalidArgument, rel)
-	}
-	if !st.Mode().IsRegular() {
-		return "", fmt.Errorf("%w: expected regular file: %q", spec.ErrInvalidArgument, rel)
-	}
-	return resolved, nil
-}
-
-func resolveExistingDirUnderRoot(root, rel string) (string, error) {
-	cand, err := joinUnderRoot(root, rel)
-	if err != nil {
-		return "", err
-	}
-	resolved, err := filepath.EvalSymlinks(cand)
-	if err != nil {
-		return "", err
-	}
-	ok, err := withinRoot(root, resolved)
-	if err != nil {
-		return "", err
-	}
-	if !ok {
-		return "", fmt.Errorf("%w: path escapes root via symlink: %q", spec.ErrInvalidArgument, rel)
-	}
-	st, err := os.Stat(resolved)
-	if err != nil {
-		return "", err
-	}
-	if !st.IsDir() {
-		return "", fmt.Errorf("%w: expected directory: %q", spec.ErrInvalidArgument, rel)
-	}
-	return resolved, nil
-}
-
-// buildScriptCommand chooses a shell and builds a cross-platform command string for shelltool.
-func buildScriptCommand(scriptAbs string, args []string) (shellName shelltool.ShellName, invoke string, err error) {
-	ext := strings.ToLower(filepath.Ext(scriptAbs))
-
-	if isWindows() {
-		// Hardened default: only support PowerShell scripts.
-
-		if ext == ".ps1" {
-			if _, err := exec.LookPath("pwsh"); err == nil {
-				return shelltool.ShellNamePwsh, psInvoke(scriptAbs, args), nil
-			}
-			return shelltool.ShellNamePowershell, psInvoke(scriptAbs, args), nil
-		}
-		// "".bat/.cmd" (or fallback): cmd call.
-		return "", "", fmt.Errorf("%w: only .ps1 scripts are supported on windows", spec.ErrInvalidArgument)
-	}
-
-	if ext == ".sh" {
-		// Avoid PATH-dependent "sh" resolution inside the running shell by using an absolute interpreter path.
-		shPath, err := exec.LookPath("sh")
-		if err != nil || strings.TrimSpace(shPath) == "" {
-			return "", "", fmt.Errorf("%w: could not find 'sh' interpreter", spec.ErrInvalidArgument)
-		}
-		return shelltool.ShellNameSh, posixInvokeWithInterpreter(shPath, scriptAbs, args), nil
-	}
-
-	return "", "", fmt.Errorf("%w: only .sh scripts are supported on non-windows", spec.ErrInvalidArgument)
-}
-
-func posixInvokeWithInterpreter(interpreter, scriptAbs string, args []string) string {
-	parts := make([]string, 0, 2+len(args))
-	parts = append(parts, posixQuote(interpreter), posixQuote(scriptAbs))
-	for _, a := range args {
-		parts = append(parts, posixQuote(a))
-	}
-	return strings.Join(parts, " ")
-}
-
-func psInvoke(scriptAbs string, args []string) string {
-	parts := make([]string, 0, 2+len(args))
-	parts = append(parts, "&", psQuote(scriptAbs))
-	for _, a := range args {
-		parts = append(parts, psQuote(a))
-	}
-	return strings.Join(parts, " ")
-}
-
-func psQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
-}
-
-func posixQuote(s string) string {
-	if s == "" {
-		return "''"
-	}
-	if !strings.ContainsRune(s, '\'') {
-		return "'" + s + "'"
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
+func isWindows() bool { return runtime.GOOS == "windows" }
