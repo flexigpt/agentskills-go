@@ -23,6 +23,14 @@ var (
 	defaultAllowedScriptsExtensionNonWin = []string{".sh", ".py"}
 )
 
+type Provider struct {
+	runScriptsEnabled   bool
+	execPolicy          exectool.ExecutionPolicy
+	runScriptPolicy     exectool.RunScriptPolicy
+	allowedScriptExt    []string
+	allowedScriptExtSet bool
+}
+
 type Option func(*Provider) error
 
 // WithRunScripts enables RunScript. Default is disabled.
@@ -81,14 +89,6 @@ func WithAllowedScriptExtensions(exts []string) Option {
 
 		return nil
 	}
-}
-
-type Provider struct {
-	runScriptsEnabled   bool
-	execPolicy          exectool.ExecutionPolicy
-	runScriptPolicy     exectool.RunScriptPolicy
-	allowedScriptExt    []string
-	allowedScriptExtSet bool
 }
 
 func New(opts ...Option) (*Provider, error) {

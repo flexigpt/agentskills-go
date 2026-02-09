@@ -141,6 +141,40 @@ func (st *Store) PruneSkill(key spec.SkillKey) {
 	}
 }
 
+// touch updates lastUsed and MRU position for an existing session.
+// Safe to call frequently; does not allocate.
+func (st *Store) touch(id string) {
+	now := time.Now()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.evictExpiredLocked(now)
+
+	e := st.m[id]
+	if e == nil {
+		return
+	}
+	it, _ := e.Value.(*item)
+	if it == nil || it.s == nil || it.s.closed.Load() {
+		st.deleteElemLocked(e)
+		return
+	}
+	it.lastUsed = now
+	st.lru.MoveToFront(e)
+}
+
+func (st *Store) evictOverLimitLocked() {
+	if st.maxSessions <= 0 {
+		return
+	}
+	for st.lru.Len() > st.maxSessions {
+		e := st.lru.Back()
+		if e == nil {
+			return
+		}
+		st.deleteElemLocked(e)
+	}
+}
+
 func (st *Store) evictExpiredLocked(now time.Time) {
 	if st.ttl <= 0 {
 		return
@@ -161,19 +195,6 @@ func (st *Store) evictExpiredLocked(now time.Time) {
 	}
 }
 
-func (st *Store) evictOverLimitLocked() {
-	if st.maxSessions <= 0 {
-		return
-	}
-	for st.lru.Len() > st.maxSessions {
-		e := st.lru.Back()
-		if e == nil {
-			return
-		}
-		st.deleteElemLocked(e)
-	}
-}
-
 func (st *Store) deleteElemLocked(e *list.Element) {
 	it, _ := e.Value.(*item)
 	if it != nil && it.s != nil {
@@ -182,25 +203,4 @@ func (st *Store) deleteElemLocked(e *list.Element) {
 
 	}
 	st.lru.Remove(e)
-}
-
-// touch updates lastUsed and MRU position for an existing session.
-// Safe to call frequently; does not allocate.
-func (st *Store) touch(id string) {
-	now := time.Now()
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.evictExpiredLocked(now)
-
-	e := st.m[id]
-	if e == nil {
-		return
-	}
-	it, _ := e.Value.(*item)
-	if it == nil || it.s == nil || it.s.closed.Load() {
-		st.deleteElemLocked(e)
-		return
-	}
-	it.lastUsed = now
-	st.lru.MoveToFront(e)
 }

@@ -50,13 +50,6 @@ func New(providers ProviderResolver) *Catalog {
 	}
 }
 
-func normHandle(h spec.SkillHandle) handleKey {
-	return handleKey{
-		Name: strings.TrimSpace(h.Name),
-		Path: strings.TrimSpace(h.Path),
-	}
-}
-
 func (c *Catalog) Add(ctx context.Context, key spec.SkillKey) (spec.SkillRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return spec.SkillRecord{}, err
@@ -250,6 +243,25 @@ func (c *Catalog) ListRecords(f Filter) []spec.SkillRecord {
 	return out
 }
 
+// AvailableSkillsPromptXML builds <available_skills> XML for system prompts.
+func (c *Catalog) AvailableSkillsPromptXML(f Filter) (string, error) {
+	c.mu.RLock()
+	items := make([]AvailableSkillItem, 0, len(c.byKey))
+	for _, e := range c.byKey {
+		if !f.match(e) {
+			continue
+		}
+		items = append(items, AvailableSkillItem{
+			Name:        e.llmName,
+			Description: e.rec.Description,
+			Path:        e.rec.Key.Path,
+		})
+	}
+	c.mu.RUnlock()
+
+	return AvailableSkillsXML(items) // sorts internally
+}
+
 // Conflict handling / name computation.
 // Rule: LLM sees (name + path). Normally "name" is key.Name.
 // Only when there is a collision on (Name, Path) across different providers,
@@ -327,6 +339,13 @@ func (c *Catalog) finishBodyLoad(key spec.SkillKey, ch chan struct{}, body strin
 	e.rec.SkillMDBody = body
 	e.bodyLoaded = true
 	e.bodyErr = nil
+}
+
+func normHandle(h spec.SkillHandle) handleKey {
+	return handleKey{
+		Name: strings.TrimSpace(h.Name),
+		Path: strings.TrimSpace(h.Path),
+	}
 }
 
 func shortHash(k spec.SkillKey) string {

@@ -273,8 +273,6 @@ func (s *Session) touchSession() {
 	}
 }
 
-func (s *Session) isClosed() bool { return s.closed.Load() }
-
 func (s *Session) pruneKeys(keys []spec.SkillKey) {
 	if len(keys) == 0 {
 		return
@@ -324,3 +322,5 @@ func (s *Session) pruneKey(k spec.SkillKey) {
 	// Remove from order slice.
 	s.activeOrder = slices.DeleteFunc(s.activeOrder, func(v spec.SkillKey) bool { return v == k })
 }
+
+func (s *Session) isClosed() bool { return s.closed.Load() }
