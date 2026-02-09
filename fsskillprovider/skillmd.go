@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flexigpt/agentskills-go/spec"
 	"gopkg.in/yaml.v3"
 )
 
@@ -22,6 +23,7 @@ const (
 
 // indexSkillDir reads and validates SKILL.md frontmatter, returning metadata and digest.
 // It does NOT return the body; body is loaded separately for progressive disclosure.
+// Assumes canonical root passed. All validations already done.
 func indexSkillDir(
 	ctx context.Context,
 	rootDir string,
@@ -32,23 +34,7 @@ func indexSkillDir(
 
 	root := strings.TrimSpace(rootDir)
 	if root == "" {
-		return "", "", nil, "", errors.New("empty rootDir")
-	}
-
-	root, err = filepath.Abs(filepath.Clean(root))
-	if err != nil {
-		return "", "", nil, "", err
-	}
-	if resolved, rerr := filepath.EvalSymlinks(root); rerr == nil && resolved != "" {
-		root = resolved
-	}
-
-	st, err := os.Stat(root)
-	if err != nil {
-		return "", "", nil, "", err
-	}
-	if !st.IsDir() {
-		return "", "", nil, "", fmt.Errorf("not a directory: %s", root)
+		return "", "", nil, "", fmt.Errorf("%w: empty rootDir", spec.ErrInvalidArgument)
 	}
 
 	skillMDPath := filepath.Join(root, skillFileName)
@@ -104,27 +90,15 @@ func loadSkillBody(ctx context.Context, rootDir string) (string, error) {
 		return "", err
 	}
 
+	// Assumes canonical root passed. All validations already done.
 	root := strings.TrimSpace(rootDir)
 	if root == "" {
-		return "", errors.New("empty rootDir")
-	}
-
-	root, err := filepath.Abs(filepath.Clean(root))
-	if err != nil {
-		return "", err
-	}
-	if resolved, rerr := filepath.EvalSymlinks(root); rerr == nil && resolved != "" {
-		root = resolved
+		return "", fmt.Errorf("%w: empty rootDir", spec.ErrInvalidArgument)
 	}
 
 	skillMDPath := filepath.Join(root, skillFileName)
 
-	b, _, err := readAllLimitedAndDigest(skillMDPath)
-	if err != nil {
-		return "", err
-	}
-
-	// Match index hardening: disallow symlink / non-regular file.
+	// Match index hardening: disallow symlink / non-regular file (check before reading).
 	if lst, lerr := os.Lstat(skillMDPath); lerr == nil {
 		if lst.Mode()&os.ModeSymlink != 0 {
 			return "", errors.New("SKILL.md must not be a symlink")
@@ -132,6 +106,10 @@ func loadSkillBody(ctx context.Context, rootDir string) (string, error) {
 		if !lst.Mode().IsRegular() {
 			return "", errors.New("SKILL.md must be a regular file")
 		}
+	}
+	b, _, err := readAllLimitedAndDigest(skillMDPath)
+	if err != nil {
+		return "", err
 	}
 
 	fm, body, hasFM, err := splitFrontmatter(string(b))

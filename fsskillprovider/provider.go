@@ -46,7 +46,12 @@ func WithExecutionPolicy(policy exectool.ExecutionPolicy) Option {
 // to llmtools-go/exectool. This option just configures that tool.
 func WithRunScriptPolicy(policy exectool.RunScriptPolicy) Option {
 	return func(p *Provider) error {
-		p.runScriptPolicy = policy
+		// Normalize/clone now to avoid sharing maps/slices with caller.
+		norm, err := exectool.NormalizeRunScriptPolicy(policy)
+		if err != nil {
+			return err
+		}
+		p.runScriptPolicy = norm
 		return nil
 	}
 }
@@ -72,22 +77,25 @@ func WithAllowedScriptExtensions(exts []string) Option {
 		}
 
 		p.allowedScriptExt = out
+		p.allowedScriptExtSet = true
+
 		return nil
 	}
 }
 
 type Provider struct {
-	runScriptsEnabled bool
-	execPolicy        exectool.ExecutionPolicy
-	runScriptPolicy   exectool.RunScriptPolicy
-	allowedScriptExt  []string
+	runScriptsEnabled   bool
+	execPolicy          exectool.ExecutionPolicy
+	runScriptPolicy     exectool.RunScriptPolicy
+	allowedScriptExt    []string
+	allowedScriptExtSet bool
 }
 
 func New(opts ...Option) (*Provider, error) {
 	p := &Provider{
 		runScriptsEnabled: false,
-		execPolicy:        exectool.DefaultExecutionPolicy,
-		runScriptPolicy:   exectool.DefaultRunScriptPolicy,
+		execPolicy:        exectool.DefaultExecutionPolicy(),
+		runScriptPolicy:   exectool.DefaultRunScriptPolicy(),
 		allowedScriptExt:  nil,
 	}
 	for _, o := range opts {
@@ -98,16 +106,26 @@ func New(opts ...Option) (*Provider, error) {
 			return nil, err
 		}
 	}
-	// Defaults if unset.
-	if len(p.allowedScriptExt) == 0 {
+	// Apply extension policy precedence:
+	//  1) WithAllowedScriptExtensions(...) if explicitly set
+	//  2) otherwise, keep caller-provided runScriptPolicy.AllowedExtensions if non-empty
+	//  3) otherwise, apply provider defaults (OS-specific)
+	if p.allowedScriptExtSet {
+		p.runScriptPolicy.AllowedExtensions = append([]string(nil), p.allowedScriptExt...)
+	} else if len(p.runScriptPolicy.AllowedExtensions) == 0 {
 		if isWindows() {
-			p.allowedScriptExt = defaultAllowedScriptsExtensionWin
+			p.runScriptPolicy.AllowedExtensions = append([]string(nil), defaultAllowedScriptsExtensionWin...)
 		} else {
-			p.allowedScriptExt = defaultAllowedScriptsExtensionNonWin
+			p.runScriptPolicy.AllowedExtensions = append([]string(nil), defaultAllowedScriptsExtensionNonWin...)
 		}
 	}
-	// Apply default/option-based extension restrictions to the tool policy.
-	p.runScriptPolicy.AllowedExtensions = append([]string(nil), p.allowedScriptExt...)
+
+	// Harden: deep-clone + normalize tool policy so later external mutations can't race.
+	norm, err := exectool.NormalizeRunScriptPolicy(p.runScriptPolicy)
+	if err != nil {
+		return nil, err
+	}
+	p.runScriptPolicy = norm
 	return p, nil
 }
 
@@ -220,6 +238,26 @@ func (p *Provider) ReadResource(
 	return ft.ReadFile(ctx, fstool.ReadFileArgs{Path: resourcePath, Encoding: string(enc)})
 }
 
+// RunScript
+//
+// Security / hardening responsibilities:
+// This provider is intentionally thin and delegates most hardening to llmtools-go tools.
+//
+// Provider responsibility (skill-specific):
+//   - Ensure all filesystem access (read/execute) is scoped to the *skill root directory*.
+//     We do this by configuring the underlying tool sandbox as:
+//     allowedRoots = [skillRoot]
+//     workBaseDir  = skillRoot
+//
+// Tool responsibility (generic hardening; enforced by llmtools-go/exectool runscript):
+//   - Path resolution/normalization and sandbox enforcement against allowedRoots
+//   - Refuse symlink traversal (workdir + script path + parent components)
+//   - Validate env/args (format + defense-in-depth limits)
+//   - Safe argv-to-shell quoting and interpreter selection by extension
+//   - Timeouts/output caps and process-tree termination
+//   - Dangerous command blocking + optional heuristics
+//
+// Note: By design, scripts may live anywhere under the skill root (ideally under "scripts/").
 func (p *Provider) RunScript(
 	ctx context.Context,
 	key spec.SkillKey,
@@ -247,15 +285,7 @@ func (p *Provider) RunScript(
 	if sp == "" {
 		return spec.RunScriptResult{}, fmt.Errorf("%w: script path is required", spec.ErrInvalidArgument)
 	}
-	// Hardening is delegated to llmtools-go/exectool (runscript):
-	//   - path normalization + allowedRoots sandbox checks
-	//   - refuse symlink traversal in workdir/script path
-	//   - env + args validation/limits
-	//   - interpreter selection by extension + safe quoting
-	//   - timeouts/output caps + process-tree termination
-	//   - dangerous command blocklist + optional heuristics
-	//
-	// Provider responsibility: scope execution to the skill root dir via allowedRoots=[root].
+
 	et, err := exectool.NewExecTool(
 		exectool.WithAllowedRoots([]string{root}),
 		exectool.WithWorkBaseDir(root),
@@ -293,10 +323,25 @@ func canonicalRoot(p string) (string, error) {
 	if root == "" {
 		return "", fmt.Errorf("%w: empty path", spec.ErrInvalidArgument)
 	}
+	if strings.ContainsRune(root, '\x00') {
+		return "", fmt.Errorf("%w: path contains NUL byte", spec.ErrInvalidArgument)
+	}
 
-	abs, err := filepath.Abs(filepath.Clean(root))
+	clean := filepath.Clean(filepath.FromSlash(root))
+	if isWindows() {
+		// Reject drive-relative paths like "C:foo" (ambiguous).
+		if vol := filepath.VolumeName(clean); vol != "" && !filepath.IsAbs(clean) {
+			return "", fmt.Errorf(
+				"%w: windows drive-relative paths like %q are not supported",
+				spec.ErrInvalidArgument,
+				root,
+			)
+		}
+	}
+
+	abs, err := filepath.Abs(clean)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", spec.ErrInvalidArgument, err)
 	}
 	if resolved, rerr := filepath.EvalSymlinks(abs); rerr == nil && strings.TrimSpace(resolved) != "" {
 		abs = resolved
@@ -304,7 +349,7 @@ func canonicalRoot(p string) (string, error) {
 
 	st, err := os.Stat(abs)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", spec.ErrInvalidArgument, err)
 	}
 	if !st.IsDir() {
 		return "", fmt.Errorf("%w: not a directory: %s", spec.ErrInvalidArgument, abs)
