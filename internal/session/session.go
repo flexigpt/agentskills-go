@@ -214,7 +214,12 @@ func (s *Session) ActivateKeys(
 		}
 
 		if s.maxActive > 0 && len(nextOrder) > s.maxActive {
-			return nil, fmt.Errorf("too many active skills (%d > %d)", len(nextOrder), s.maxActive)
+			return nil, fmt.Errorf(
+				"%w: too many active skills (%d > %d)",
+				spec.ErrInvalidArgument,
+				len(nextOrder),
+				s.maxActive,
+			)
 		}
 
 		// Ensure bodies are loadable (IO) without lock.
