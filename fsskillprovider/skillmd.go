@@ -29,7 +29,7 @@ func indexSkillDir(
 	rootDir string,
 ) (name, description string, props map[string]any, digest string, err error) {
 	if err := ctx.Err(); err != nil {
-		return "", "", nil, "", err
+		return "", "", nil, "", fmt.Errorf("indexSkillDir: %w", err)
 	}
 
 	root := strings.TrimSpace(rootDir)
@@ -51,12 +51,12 @@ func indexSkillDir(
 
 	b, sha, err := readAllLimitedAndDigest(skillMDPath)
 	if err != nil {
-		return "", "", nil, "", err
+		return "", "", nil, "", fmt.Errorf("indexSkillDir: %w", err)
 	}
 
 	fm, _, hasFM, err := splitFrontmatter(string(b))
 	if err != nil {
-		return "", "", nil, "", err
+		return "", "", nil, "", fmt.Errorf("indexSkillDir: %w", err)
 	}
 	if !hasFM {
 		return "", "", nil, "", errors.New("SKILL.md must contain YAML frontmatter")
@@ -71,10 +71,10 @@ func indexSkillDir(
 	description = strings.TrimSpace(asString(props["description"]))
 
 	if err := validateName(name); err != nil {
-		return "", "", nil, "", err
+		return "", "", nil, "", fmt.Errorf("indexSkillDir: %w", err)
 	}
 	if err := validateDescription(description); err != nil {
-		return "", "", nil, "", err
+		return "", "", nil, "", fmt.Errorf("indexSkillDir: %w", err)
 	}
 
 	// FS convention: name must match directory name.
@@ -87,7 +87,7 @@ func indexSkillDir(
 
 func loadSkillBody(ctx context.Context, rootDir string) (string, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", fmt.Errorf("loadSkillBody: %w", err)
 	}
 
 	// Assumes canonical root passed. All validations already done.
@@ -109,12 +109,12 @@ func loadSkillBody(ctx context.Context, rootDir string) (string, error) {
 	}
 	b, _, err := readAllLimitedAndDigest(skillMDPath)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("loadSkillBody: %w", err)
 	}
 
 	fm, body, hasFM, err := splitFrontmatter(string(b))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("loadSkillBody: %w", err)
 	}
 	if !hasFM {
 		return "", errors.New("SKILL.md must contain YAML frontmatter")
@@ -133,13 +133,13 @@ func loadSkillBody(ctx context.Context, rootDir string) (string, error) {
 func readAllLimitedAndDigest(path string) (data []byte, dataSHA string, err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
 
 	data, err = io.ReadAll(io.LimitReader(f, int64(maxSkillMDBytes)+1))
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("read %s: %w", path, err)
 	}
 	if len(data) > maxSkillMDBytes {
 		return nil, "", fmt.Errorf("SKILL.md too large (max %d bytes)", maxSkillMDBytes)
@@ -154,7 +154,7 @@ func splitFrontmatter(s string) (frontmatter, body string, has bool, err error) 
 
 	first, ferr := br.ReadString('\n')
 	if ferr != nil && !errors.Is(ferr, io.EOF) {
-		return "", "", false, ferr
+		return "", "", false, fmt.Errorf("read first line: %w", ferr)
 	}
 	first = strings.TrimRight(first, "\r\n")
 	if strings.TrimSpace(first) != "---" {
@@ -166,7 +166,7 @@ func splitFrontmatter(s string) (frontmatter, body string, has bool, err error) 
 	for {
 		line, lerr := br.ReadString('\n')
 		if lerr != nil && !errors.Is(lerr, io.EOF) {
-			return "", "", false, lerr
+			return "", "", false, fmt.Errorf("read frontmatter line: %w", lerr)
 		}
 		lineTrim := strings.TrimRight(line, "\r\n")
 		if strings.TrimSpace(lineTrim) == "---" {
@@ -185,7 +185,7 @@ func splitFrontmatter(s string) (frontmatter, body string, has bool, err error) 
 
 	rest, err := io.ReadAll(br)
 	if err != nil {
-		return "", "", false, err
+		return "", "", false, fmt.Errorf("read body: %w", err)
 	}
 
 	return strings.Join(fmLines, "\n"), string(rest), true, nil

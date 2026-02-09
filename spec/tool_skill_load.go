@@ -7,7 +7,7 @@ const FuncIDSkillsLoad llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-
 func SkillsLoadTool() llmtoolsgoSpec.Tool {
 	return llmtoolsgoSpec.Tool{
 		SchemaVersion: llmtoolsgoSpec.SchemaVersion,
-		ID:            "019bfeda-33f2-7315-9007-de55935d2401",
+		ID:            "019c4188-4db4-7ad8-bdd0-4126aa1fee00",
 		Slug:          "skills.load",
 		Version:       "v1.0.0",
 		DisplayName:   "Skills Load",

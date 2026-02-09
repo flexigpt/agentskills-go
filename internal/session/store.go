@@ -120,15 +120,24 @@ func (st *Store) Delete(id string) {
 
 // PruneSkill removes the given key from all sessions' active lists.
 func (st *Store) PruneSkill(key spec.SkillKey) {
+	// Collect sessions under store lock, then prune outside to avoid holding the
+	// global lock while taking per-session locks.
 	st.mu.Lock()
-	defer st.mu.Unlock()
-
+	sessions := make([]*Session, 0, st.lru.Len())
 	for e := st.lru.Front(); e != nil; e = e.Next() {
 		it, _ := e.Value.(*item)
 		if it == nil || it.s == nil || it.s.closed.Load() {
 			continue
 		}
-		it.s.pruneKey(key)
+		sessions = append(sessions, it.s)
+	}
+	st.mu.Unlock()
+
+	for _, s := range sessions {
+		if s == nil || s.closed.Load() {
+			continue
+		}
+		s.pruneKey(key)
 	}
 }
 

@@ -105,9 +105,10 @@ func (c *Catalog) Add(ctx context.Context, key spec.SkillKey) (spec.SkillRecord,
 	}
 
 	e := &entry{rec: rec}
-	// If a provider pre-populates SkillMDBody we treat it as already loaded,
-	// even if it's an empty string (rare but valid).
-	e.bodyLoaded = true && rec.SkillMDBody != "" // explicit intent
+	// If a provider pre-populates SkillMDBody we treat it as already loaded
+	// only when non-empty. (With the current data model, empty-but-loaded
+	// cannot be distinguished from not-yet-loaded.)
+	e.bodyLoaded = rec.SkillMDBody != ""
 	c.byKey[rec.Key] = e
 
 	c.recomputeLLMNamesLocked()
@@ -176,6 +177,10 @@ func (c *Catalog) EnsureBody(ctx context.Context, key spec.SkillKey) (string, er
 		return "", err
 	}
 	for range 5 {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+
 		c.mu.Lock()
 		e, ok := c.byKey[key]
 		if !ok {
@@ -195,7 +200,12 @@ func (c *Catalog) EnsureBody(ctx context.Context, key spec.SkillKey) (string, er
 		if ch := e.bodyWait; ch != nil {
 			// Someone else is loading.
 			c.mu.Unlock()
-			<-ch
+			select {
+			case <-ch:
+				// Continue.
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
 			continue
 		}
 
@@ -293,25 +303,30 @@ func (c *Catalog) finishBodyLoad(key spec.SkillKey, ch chan struct{}, body strin
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.byKey[key]
-	if ok {
-		// Close only if still the same in-flight channel.
-		if e.bodyWait == ch {
-			e.bodyWait = nil
-			close(ch)
-		}
-		if err != nil {
-			e.bodyErr = err
-			return
-		}
-		e.rec.SkillMDBody = body
-		e.bodyLoaded = true
-		e.bodyErr = nil
+	if !ok {
+		// Entry removed: Remove() is responsible for closing/waking waiters.
 		return
 	}
-	// Entry removed: still close channel to wake waiters.
-	if ch != nil {
-		close(ch)
+	// Only publish if this completion corresponds to the currently in-flight load.
+	if e.bodyWait != ch {
+		return
 	}
+
+	e.bodyWait = nil
+	close(ch)
+
+	if err != nil {
+		// Don't permanently cache context cancellation/deadline errors.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return
+		}
+		e.bodyErr = err
+		return
+	}
+
+	e.rec.SkillMDBody = body
+	e.bodyLoaded = true
+	e.bodyErr = nil
 }
 
 func shortHash(k spec.SkillKey) string {

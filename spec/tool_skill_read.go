@@ -7,7 +7,7 @@ const FuncIDSkillsRead llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-
 func SkillsReadTool() llmtoolsgoSpec.Tool {
 	return llmtoolsgoSpec.Tool{
 		SchemaVersion: llmtoolsgoSpec.SchemaVersion,
-		ID:            "019bfeda-33f2-7315-9007-de55935d2403",
+		ID:            "019c4188-73e6-7301-8d3d-28a5d9e23f9e",
 		Slug:          "skills.read",
 		Version:       "v1.0.0",
 		DisplayName:   "Skills Read",

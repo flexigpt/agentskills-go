@@ -7,7 +7,7 @@ const FuncIDSkillsUnload llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskill
 func SkillsUnloadTool() llmtoolsgoSpec.Tool {
 	return llmtoolsgoSpec.Tool{
 		SchemaVersion: llmtoolsgoSpec.SchemaVersion,
-		ID:            "019bfeda-33f2-7315-9007-de55935d2402",
+		ID:            "019c4188-ce79-7a71-ac5a-a54cf5de3815",
 		Slug:          "skills.unload",
 		Version:       "v1.0.0",
 		DisplayName:   "Skills Unload",
