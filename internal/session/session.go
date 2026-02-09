@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -75,20 +76,34 @@ func (s *Session) ActiveSkillsPromptXML(ctx context.Context) (string, error) {
 	s.mu.Unlock()
 
 	items := make([]catalog.ActiveSkillItem, 0, len(order))
+	missing := make([]spec.SkillKey, 0)
+
 	for _, k := range order {
 
 		h, ok := s.catalog.HandleForKey(k)
 		if !ok {
-			return "", spec.ErrSkillNotFound
+			// Skill removed from catalog: auto-prune from session.
+			missing = append(missing, k)
+			continue
 		}
 		body, err := s.catalog.EnsureBody(ctx, k)
 		if err != nil {
+			// If the skill disappeared concurrently, auto-prune; otherwise fail.
+			if errors.Is(err, spec.ErrSkillNotFound) {
+				missing = append(missing, k)
+				continue
+			}
 			return "", err
 		}
 		items = append(items, catalog.ActiveSkillItem{
 			Name: h.Name,
 			Body: body,
 		})
+	}
+
+	// Apply pruning in one locked mutation to reduce contention.
+	if len(missing) > 0 {
+		s.pruneKeys(missing)
 	}
 
 	return catalog.ActiveSkillsXML(items)
@@ -255,7 +270,43 @@ func (s *Session) touchSession() {
 
 func (s *Session) isClosed() bool { return s.closed.Load() }
 
+func (s *Session) pruneKeys(keys []spec.SkillKey) {
+	if len(keys) == 0 {
+		return
+	}
+	rm := make(map[spec.SkillKey]struct{}, len(keys))
+	for _, k := range keys {
+		rm[k] = struct{}{}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.isClosed() {
+		return
+	}
+
+	changed := false
+	for k := range rm {
+		if _, ok := s.activeSet[k]; ok {
+			delete(s.activeSet, k)
+			changed = true
+		}
+	}
+	if !changed {
+		return
+	}
+
+	s.activeOrder = slices.DeleteFunc(s.activeOrder, func(v spec.SkillKey) bool {
+		_, ok := rm[v]
+		return ok
+	})
+	s.stateVersion++
+}
+
 func (s *Session) pruneKey(k spec.SkillKey) {
+	if s.closed.Load() {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

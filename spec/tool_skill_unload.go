@@ -31,6 +31,20 @@ func SkillsUnloadTool() llmtoolsgoSpec.Tool {
     "skills":{"type":"array","items":{"$ref":"#/definitions/skill_handle"}},
     "all":{"type":"boolean","default":false}
   },
+	"anyOf":[
+    {
+      "required":["all"],
+      "properties":{
+        "all":{"const":true}
+      }
+    },
+    {
+      "required":["skills"],
+      "properties":{
+        "skills":{"minItems":1}
+      }
+    }
+  ],
   "additionalProperties":false
 }`),
 		GoImpl:     llmtoolsgoSpec.GoToolImpl{FuncID: FuncIDSkillsUnload},
