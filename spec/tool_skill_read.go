@@ -2,40 +2,35 @@ package spec
 
 import llmtoolsgoSpec "github.com/flexigpt/llmtools-go/spec"
 
-const FuncIDSkillsRead llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/spec/tools.skills.read"
+const FuncIDSkillsReadResource llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/skills.readresource"
 
-func SkillsReadTool() llmtoolsgoSpec.Tool {
+func SkillsReadResourceTool() llmtoolsgoSpec.Tool {
 	return llmtoolsgoSpec.Tool{
 		SchemaVersion: llmtoolsgoSpec.SchemaVersion,
 		ID:            "019c4188-73e6-7301-8d3d-28a5d9e23f9e",
-		Slug:          "skills.read",
+		Slug:          "skills.readresource",
 		Version:       "v1.0.0",
-		DisplayName:   "Skills Read",
-		Description:   "Read a skill-scoped resource relative to the skill base path. Skill is required; session-bound (no sessionID arg).",
-		Tags:          []string{"skills", "read"},
+		DisplayName:   "Skills Read Resource",
+		Description:   "read a skill-scoped resource relative to an active skill base location",
+		Tags:          []string{"skills"},
 		ArgSchema: llmtoolsgoSpec.JSONSchema(`{
-  "$schema":"http://json-schema.org/draft-07/schema#",
-  "type":"object",
-  "definitions":{
-    "skill_handle":{
-      "type":"object",
-      "properties":{
-        "name":{"type":"string"},
-        "path":{"type":"string"}
-      },
-      "required":["name","path"],
-      "additionalProperties":false
-    }
-  },
-  "properties":{
-    "skill":{"$ref":"#/definitions/skill_handle"},
-    "path":{"type":"string"},
-    "encoding":{"type":"string","enum":["text","binary"],"default":"text"}
-  },
-  "required":["skill","path"],
-  "additionalProperties":false
+"$schema":"http://json-schema.org/draft-07/schema#",
+"type":"object",
+"properties":{
+	"skillName":{"type":"string","description":"skill name"},
+	"skillLocation":{"type":"string","description":"provider-interpreted base location for the skill"},
+	"resourceLocation":{"type":"string","description":"resource location; typically relative to skillLocation (provider-defined semantics)"},
+	"encoding":{
+		"type":"string",
+		"enum":["text","binary"],
+		"default":"text",
+		"description":"text: return as UTF-8 text; binary: return binary as a base64-encoded string"
+	}
+},
+"required":["skillName","skillLocation","resourceLocation"],
+"additionalProperties":false
 }`),
-		GoImpl:     llmtoolsgoSpec.GoToolImpl{FuncID: FuncIDSkillsRead},
+		GoImpl:     llmtoolsgoSpec.GoToolImpl{FuncID: FuncIDSkillsReadResource},
 		CreatedAt:  llmtoolsgoSpec.SchemaStartTime,
 		ModifiedAt: llmtoolsgoSpec.SchemaStartTime,
 	}

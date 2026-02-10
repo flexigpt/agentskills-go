@@ -10,16 +10,16 @@ func TestAvailableSkillsXML_SortsAndEscapes(t *testing.T) {
 	t.Parallel()
 
 	in := []AvailableSkillItem{
-		{Name: "b", Description: "2 & 3", Path: "/2"},
-		{Name: "a", Description: "<x>", Path: "/9"},
-		{Name: "a", Description: "ok", Path: "/1"},
+		{Name: "b", Description: "2 & 3", Location: "/2"},
+		{Name: "a", Description: "<x>", Location: "/9"},
+		{Name: "a", Description: "ok", Location: "/1"},
 	}
 
 	s, err := AvailableSkillsXML(in)
 	if err != nil {
 		t.Fatalf("AvailableSkillsXML: %v", err)
 	}
-	if !strings.Contains(s, "<available_skills") {
+	if !strings.Contains(s, "<availableSkills") {
 		t.Fatalf("unexpected xml: %s", s)
 	}
 
@@ -31,11 +31,11 @@ func TestAvailableSkillsXML_SortsAndEscapes(t *testing.T) {
 		t.Fatalf("expected 3 skills, got %d", len(decoded.Skills))
 	}
 
-	// Sorted by name then path.
-	if decoded.Skills[0].Name != "a" || decoded.Skills[0].Path != "/1" {
+	// Sorted by name then Location.
+	if decoded.Skills[0].Name != "a" || decoded.Skills[0].Location != "/1" {
 		t.Fatalf("unexpected first: %+v", decoded.Skills[0])
 	}
-	if decoded.Skills[1].Name != "a" || decoded.Skills[1].Path != "/9" {
+	if decoded.Skills[1].Name != "a" || decoded.Skills[1].Location != "/9" {
 		t.Fatalf("unexpected second: %+v", decoded.Skills[1])
 	}
 	if decoded.Skills[2].Name != "b" {
@@ -58,7 +58,7 @@ func TestActiveSkillsXML_UsesCDATA(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ActiveSkillsXML: %v", err)
 	}
-	if !strings.Contains(s, "<active_skills") {
+	if !strings.Contains(s, "<activeSkills") {
 		t.Fatalf("unexpected xml: %s", s)
 	}
 	// CDATA marker should appear.

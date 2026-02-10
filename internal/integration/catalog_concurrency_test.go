@@ -44,7 +44,7 @@ func (p *blockingProvider) ReadResource(
 	ctx context.Context,
 	key spec.SkillKey,
 	resourcePath string,
-	encoding spec.ReadEncoding,
+	encoding spec.ReadResourceEncoding,
 ) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
 	return nil, spec.ErrInvalidArgument
 }
@@ -69,7 +69,7 @@ func TestCatalog_EnsureBody_WaitHonorsContext_AndRemoveDoesNotPanic(t *testing.T
 	}
 	cat := catalog.New(fakeResolver{p: p})
 
-	key := spec.SkillKey{Type: "fake", Name: "s", Path: "/x"}
+	key := spec.SkillKey{Type: "fake", SkillHandle: spec.SkillHandle{Name: "s", Location: "/x"}}
 
 	_, err := cat.Add(t.Context(), key)
 	if err != nil {

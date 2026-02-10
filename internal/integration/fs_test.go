@@ -56,15 +56,18 @@ func TestRuntime_FSProvider_EndToEnd(t *testing.T) {
 	}
 
 	// Add skill.
-	rec, err := rt.AddSkill(ctx, spec.SkillKey{
-		Type: fsskillprovider.Type,
-		Name: "hello-skill",
-		Path: skillDir,
-	})
+
+	rec, err := rt.AddSkill(
+		ctx,
+		spec.SkillKey{
+			Type:        fsskillprovider.Type,
+			SkillHandle: spec.SkillHandle{Name: "hello-skill", Location: skillDir},
+		},
+	)
 	if err != nil {
 		t.Fatalf("add skill: %v", err)
 	}
-	if rec.Key.Path == "" {
+	if rec.Key.Location == "" {
 		t.Fatalf("expected normalized path in record")
 	}
 
@@ -73,8 +76,8 @@ func TestRuntime_FSProvider_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("available prompt xml: %v", err)
 	}
-	if !strings.Contains(availXML, "<available_skills") {
-		t.Fatalf("expected <available_skills> xml, got: %s", availXML)
+	if !strings.Contains(availXML, "<availableSkills") {
+		t.Fatalf("expected <availableSkills> xml, got: %s", availXML)
 	}
 	if !strings.Contains(availXML, "<name>hello-skill</name>") {
 		t.Fatalf("expected skill name in xml, got: %s", availXML)
@@ -99,8 +102,8 @@ func TestRuntime_FSProvider_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("active prompt xml: %v", err)
 	}
-	if !strings.Contains(activeXML, "<active_skills") {
-		t.Fatalf("expected <active_skills> xml, got: %s", activeXML)
+	if !strings.Contains(activeXML, "<activeSkills") {
+		t.Fatalf("expected <activeSkills> xml, got: %s", activeXML)
 	}
 	if !strings.Contains(activeXML, "Hello Skill") {
 		t.Fatalf("expected skill body in active xml, got: %s", activeXML)

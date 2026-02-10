@@ -2,7 +2,7 @@ package spec
 
 import llmtoolsgoSpec "github.com/flexigpt/llmtools-go/spec"
 
-const FuncIDSkillsRunScript llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/spec/tools.skills.runscript"
+const FuncIDSkillsRunScript llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/skills.runscript"
 
 func SkillsRunScriptTool() llmtoolsgoSpec.Tool {
 	return llmtoolsgoSpec.Tool{
@@ -11,31 +11,21 @@ func SkillsRunScriptTool() llmtoolsgoSpec.Tool {
 		Slug:          "skills.runscript",
 		Version:       "v1.0.0",
 		DisplayName:   "Skills Run Script",
-		Description:   "Execute a script from within the selected active skill. Skill is required; session-bound (no sessionID arg).",
-		Tags:          []string{"skills", "shell", "exec"},
+		Description:   "execute a script from within the selected active skill",
+		Tags:          []string{"skills", "exec"},
 		ArgSchema: llmtoolsgoSpec.JSONSchema(`{
-  "$schema":"http://json-schema.org/draft-07/schema#",
-  "type":"object",
-  "definitions":{
-    "skill_handle":{
-      "type":"object",
-      "properties":{
-        "name":{"type":"string"},
-        "path":{"type":"string"}
-      },
-      "required":["name","path"],
-      "additionalProperties":false
-    }
-  },
-  "properties":{
-    "skill":{"$ref":"#/definitions/skill_handle"},
-    "path":{"type":"string","description":"Relative script path; must be under skill root (optionally scripts/)."},
-    "args":{"type":"array","items":{"type":"string"}},
-    "env":{"type":"object","additionalProperties":{"type":"string"}},
-    "workdir":{"type":"string","description":"Relative workdir under skill base. Default provider-specific (fs: skill base)."}
-  },
-  "required":["skill","path"],
-  "additionalProperties":false
+"$schema":"http://json-schema.org/draft-07/schema#",
+"type":"object",
+"properties":{
+	"skillName":{"type":"string","description":"skill name"},
+	"skillLocation":{"type":"string","description":"provider-interpreted base location for the skill"},
+	"scriptLocation":{"type":"string","description":"script location; typically relative to skillLocation"},
+	"args":{"type":"array","items":{"type":"string"},"description":"positional arguments passed to the script"},
+	"env":{"type":"object","additionalProperties":{"type":"string"},"description":"environment variables for the script process"},
+	"workDir":{"type":"string","description":"working directory location for the script; typically relative to skillLocation"}
+},
+"required":["skillName","skillLocation","scriptLocation"],
+"additionalProperties":false
 }`),
 		GoImpl:     llmtoolsgoSpec.GoToolImpl{FuncID: FuncIDSkillsRunScript},
 		CreatedAt:  llmtoolsgoSpec.SchemaStartTime,

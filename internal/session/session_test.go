@@ -15,8 +15,8 @@ func TestSession_ActivateKeys_ReplaceAddDedupeAndCanonicalize(t *testing.T) {
 	t.Parallel()
 
 	cat := newMemCatalog()
-	k1 := spec.SkillKey{Type: "t", Name: "a", Path: "abs"}
-	k2 := spec.SkillKey{Type: "t", Name: "b", Path: "p2"}
+	k1 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "abs"}}
+	k2 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "b", Location: "p2"}}
 	cat.add(k1, "B1")
 	cat.add(k2, "B2")
 
@@ -45,7 +45,11 @@ func TestSession_ActivateKeys_ReplaceAddDedupeAndCanonicalize(t *testing.T) {
 	}
 
 	// Canonicalize: request with non-canonical key not in catalog, provider.Index normalizes to abs and matches.
-	hs, err = s.ActivateKeys(t.Context(), []spec.SkillKey{{Type: "t", Name: "a", Path: "rel"}}, spec.LoadModeReplace)
+	hs, err = s.ActivateKeys(
+		t.Context(),
+		[]spec.SkillKey{{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "rel"}}},
+		spec.LoadModeReplace,
+	)
 	if err != nil {
 		t.Fatalf("ActivateKeys canonicalize: %v", err)
 	}
@@ -58,8 +62,8 @@ func TestSession_ActivateKeys_EnsureBodyErrorDoesNotCommit(t *testing.T) {
 	t.Parallel()
 
 	cat := newMemCatalog()
-	k1 := spec.SkillKey{Type: "t", Name: "a", Path: "p1"}
-	k2 := spec.SkillKey{Type: "t", Name: "b", Path: "p2"}
+	k1 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "p1"}}
+	k2 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "b", Location: "p2"}}
 	cat.add(k1, "ok")
 	cat.add(k2, "ok")
 
@@ -100,8 +104,8 @@ func TestSession_ActivateKeys_MaxActiveIsInvalidArgument(t *testing.T) {
 	t.Parallel()
 
 	cat := newMemCatalog()
-	k1 := spec.SkillKey{Type: "t", Name: "a", Path: "p1"}
-	k2 := spec.SkillKey{Type: "t", Name: "b", Path: "p2"}
+	k1 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "p1"}}
+	k2 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "b", Location: "p2"}}
 	cat.add(k1, "ok")
 	cat.add(k2, "ok")
 
@@ -126,8 +130,8 @@ func TestSession_ActivateKeys_RetriesOnConcurrentModification(t *testing.T) {
 	t.Parallel()
 
 	cat := newMemCatalog()
-	k1 := spec.SkillKey{Type: "t", Name: "a", Path: "p1"}
-	k2 := spec.SkillKey{Type: "t", Name: "b", Path: "p2"}
+	k1 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "p1"}}
+	k2 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "b", Location: "p2"}}
 	cat.add(k1, "ok")
 	cat.add(k2, "ok")
 

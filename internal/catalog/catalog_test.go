@@ -51,7 +51,7 @@ func (p *provider) ReadResource(
 	ctx context.Context,
 	key spec.SkillKey,
 	resourcePath string,
-	encoding spec.ReadEncoding,
+	encoding spec.ReadResourceEncoding,
 ) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
 	return nil, spec.ErrInvalidArgument
 }
@@ -81,32 +81,32 @@ func TestCatalog_AddValidationAndProviderErrors(t *testing.T) {
 	}{
 		{
 			name:      "missing type",
-			key:       spec.SkillKey{Type: "", Name: "n", Path: "p"},
+			key:       spec.SkillKey{Type: "", SkillHandle: spec.SkillHandle{Name: "n", Location: "p"}},
 			resolver:  mapResolver{"t": p},
 			wantIsErr: spec.ErrInvalidArgument,
 		},
 		{
 			name:      "missing name",
-			key:       spec.SkillKey{Type: "t", Name: "", Path: "p"},
+			key:       spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "", Location: "p"}},
 			resolver:  mapResolver{"t": p},
 			wantIsErr: spec.ErrInvalidArgument,
 		},
 		{
 			name:      "missing path",
-			key:       spec.SkillKey{Type: "t", Name: "n", Path: ""},
+			key:       spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "n", Location: ""}},
 			resolver:  mapResolver{"t": p},
 			wantIsErr: spec.ErrInvalidArgument,
 		},
 		{
 			name:      "provider not found",
-			key:       spec.SkillKey{Type: "missing", Name: "n", Path: "p"},
+			key:       spec.SkillKey{Type: "missing", SkillHandle: spec.SkillHandle{Name: "n", Location: "p"}},
 			resolver:  mapResolver{"t": p},
 			wantIsErr: spec.ErrProviderNotFound,
 			wantSub:   "unknown provider type",
 		},
 		{
 			name: "provider changes type",
-			key:  spec.SkillKey{Type: "t", Name: "n", Path: "p"},
+			key:  spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "n", Location: "p"}},
 			resolver: mapResolver{"t": &provider{
 				typ: "t",
 				indexFn: func(ctx context.Context, key spec.SkillKey) (spec.SkillRecord, error) {
@@ -119,7 +119,8 @@ func TestCatalog_AddValidationAndProviderErrors(t *testing.T) {
 		},
 		{
 			name: "provider changes name",
-			key:  spec.SkillKey{Type: "t", Name: "n", Path: "p"},
+			key:  spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "n", Location: "p"}},
+
 			resolver: mapResolver{"t": &provider{
 				typ: "t",
 				indexFn: func(ctx context.Context, key spec.SkillKey) (spec.SkillRecord, error) {
@@ -158,8 +159,8 @@ func TestCatalog_HandleDisambiguationOnCollision(t *testing.T) {
 	c := New(mapResolver{"a": pa, "b": pb})
 
 	// Same name+path, different type => collision group => LLM names become "type:name".
-	ka := spec.SkillKey{Type: "a", Name: "same", Path: "/p"}
-	kb := spec.SkillKey{Type: "b", Name: "same", Path: "/p"}
+	ka := spec.SkillKey{Type: "a", SkillHandle: spec.SkillHandle{Name: "same", Location: "/p"}}
+	kb := spec.SkillKey{Type: "b", SkillHandle: spec.SkillHandle{Name: "same", Location: "/p"}}
 
 	_, err := c.Add(t.Context(), ka)
 	if err != nil {
@@ -213,7 +214,7 @@ func TestCatalog_EnsureBody_CachesSuccess_SingleFlightConcurrency(t *testing.T) 
 	}
 	c := New(mapResolver{"t": p})
 
-	key := spec.SkillKey{Type: "t", Name: "n", Path: "p"}
+	key := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "n", Location: "p"}}
 	if _, err := c.Add(t.Context(), key); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -288,7 +289,7 @@ func TestCatalog_EnsureBody_DoesNotCacheContextCancel(t *testing.T) {
 	}
 	c := New(mapResolver{"t": p})
 
-	key := spec.SkillKey{Type: "t", Name: "n", Path: "p"}
+	key := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "n", Location: "p"}}
 	if _, err := c.Add(t.Context(), key); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -344,7 +345,7 @@ func TestCatalog_EnsureBody_WaitHonorsContext_AndRemoveWakesWaiters(t *testing.T
 	}
 	c := New(mapResolver{"t": p})
 
-	key := spec.SkillKey{Type: "t", Name: "n", Path: "p"}
+	key := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "n", Location: "p"}}
 	if _, err := c.Add(t.Context(), key); err != nil {
 		t.Fatalf("Add: %v", err)
 	}

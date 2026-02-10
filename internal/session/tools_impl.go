@@ -23,7 +23,7 @@ func (s *Session) NewRegistry(opts ...llmtools.RegistryOption) (*llmtools.Regist
 	if err := llmtools.RegisterTypedAsTextTool(r, spec.SkillsUnloadTool(), s.toolUnload); err != nil {
 		return nil, err
 	}
-	if err := llmtools.RegisterOutputsTool(r, spec.SkillsReadTool(), s.toolRead); err != nil {
+	if err := llmtools.RegisterOutputsTool(r, spec.SkillsReadResourceTool(), s.toolRead); err != nil {
 		return nil, err
 	}
 	if err := llmtools.RegisterTypedAsTextTool(r, spec.SkillsRunScriptTool(), s.toolRunScript); err != nil {
@@ -57,8 +57,8 @@ func (s *Session) toolLoad(ctx context.Context, args spec.LoadArgs) (spec.LoadOu
 	seen := map[spec.SkillKey]struct{}{}
 
 	for _, h := range args.Skills {
-		if strings.TrimSpace(h.Name) == "" || strings.TrimSpace(h.Path) == "" {
-			return spec.LoadOut{}, fmt.Errorf("%w: each skill requires name and path", spec.ErrInvalidArgument)
+		if strings.TrimSpace(h.Name) == "" || strings.TrimSpace(h.Location) == "" {
+			return spec.LoadOut{}, fmt.Errorf("%w: each skill requires name and location", spec.ErrInvalidArgument)
 		}
 		k, ok := s.catalog.ResolveHandle(h)
 		if !ok {
@@ -110,8 +110,8 @@ func (s *Session) toolUnload(ctx context.Context, args spec.UnloadArgs) (spec.Un
 	rm := map[spec.SkillKey]struct{}{}
 
 	for _, h := range args.Skills {
-		if strings.TrimSpace(h.Name) == "" || strings.TrimSpace(h.Path) == "" {
-			return spec.UnloadOut{}, fmt.Errorf("%w: each skill requires name and path", spec.ErrInvalidArgument)
+		if strings.TrimSpace(h.Name) == "" || strings.TrimSpace(h.Location) == "" {
+			return spec.UnloadOut{}, fmt.Errorf("%w: each skill requires name and location", spec.ErrInvalidArgument)
 		}
 		k, ok := s.catalog.ResolveHandle(h)
 		if !ok {
@@ -149,7 +149,10 @@ func (s *Session) toolUnload(ctx context.Context, args spec.UnloadArgs) (spec.Un
 	return spec.UnloadOut{ActiveSkills: handles}, nil
 }
 
-func (s *Session) toolRead(ctx context.Context, args spec.ReadArgs) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
+func (s *Session) toolRead(
+	ctx context.Context,
+	args spec.ReadResourceArgs,
+) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -157,16 +160,17 @@ func (s *Session) toolRead(ctx context.Context, args spec.ReadArgs) ([]llmtoolsg
 	if s.isClosed() {
 		return nil, spec.ErrSessionNotFound
 	}
-	if strings.TrimSpace(args.Skill.Name) == "" || strings.TrimSpace(args.Skill.Path) == "" {
-		return nil, fmt.Errorf("%w: skill.name and skill.path are required", spec.ErrInvalidArgument)
+	if strings.TrimSpace(args.SkillName) == "" || strings.TrimSpace(args.SkillLocation) == "" {
+		return nil, fmt.Errorf("%w: skill name and location are required", spec.ErrInvalidArgument)
 	}
-	if strings.TrimSpace(args.Path) == "" {
-		return nil, fmt.Errorf("%w: path is required", spec.ErrInvalidArgument)
+	if strings.TrimSpace(args.ResourceLocation) == "" {
+		return nil, fmt.Errorf("%w: location is required", spec.ErrInvalidArgument)
 	}
 
-	k, ok := s.catalog.ResolveHandle(args.Skill)
+	h := spec.SkillHandle{Name: args.SkillName, Location: args.SkillLocation}
+	k, ok := s.catalog.ResolveHandle(h)
 	if !ok {
-		return nil, fmt.Errorf("%w: unknown skill handle: %+v", spec.ErrSkillNotFound, args.Skill)
+		return nil, fmt.Errorf("%w: unknown skill handle: %+v", spec.ErrSkillNotFound, h)
 	}
 
 	s.mu.Lock()
@@ -183,10 +187,10 @@ func (s *Session) toolRead(ctx context.Context, args spec.ReadArgs) ([]llmtoolsg
 
 	enc := args.Encoding
 	if strings.TrimSpace(string(enc)) == "" {
-		enc = spec.ReadEncodingText
+		enc = spec.ReadResourceEncodingText
 	}
 
-	return p.ReadResource(ctx, k, args.Path, enc)
+	return p.ReadResource(ctx, k, args.ResourceLocation, enc)
 }
 
 func (s *Session) toolRunScript(ctx context.Context, args spec.RunScriptArgs) (spec.RunScriptOut, error) {
@@ -197,16 +201,17 @@ func (s *Session) toolRunScript(ctx context.Context, args spec.RunScriptArgs) (s
 	if s.isClosed() {
 		return spec.RunScriptOut{}, spec.ErrSessionNotFound
 	}
-	if strings.TrimSpace(args.Skill.Name) == "" || strings.TrimSpace(args.Skill.Path) == "" {
-		return spec.RunScriptOut{}, fmt.Errorf("%w: skill.name and skill.path are required", spec.ErrInvalidArgument)
+	if strings.TrimSpace(args.SkillName) == "" || strings.TrimSpace(args.SkillLocation) == "" {
+		return spec.RunScriptOut{}, fmt.Errorf("%w: skill name and location are required", spec.ErrInvalidArgument)
 	}
-	if strings.TrimSpace(args.Path) == "" {
-		return spec.RunScriptOut{}, fmt.Errorf("%w: path is required", spec.ErrInvalidArgument)
+	if strings.TrimSpace(args.ScriptLocation) == "" {
+		return spec.RunScriptOut{}, fmt.Errorf("%w: location is required", spec.ErrInvalidArgument)
 	}
 
-	k, ok := s.catalog.ResolveHandle(args.Skill)
+	h := spec.SkillHandle{Name: args.SkillName, Location: args.SkillLocation}
+	k, ok := s.catalog.ResolveHandle(h)
 	if !ok {
-		return spec.RunScriptOut{}, fmt.Errorf("%w: unknown skill handle: %+v", spec.ErrSkillNotFound, args.Skill)
+		return spec.RunScriptOut{}, fmt.Errorf("%w: unknown skill handle: %+v", spec.ErrSkillNotFound, h)
 	}
 
 	s.mu.Lock()
@@ -222,5 +227,5 @@ func (s *Session) toolRunScript(ctx context.Context, args spec.RunScriptArgs) (s
 		return spec.RunScriptOut{}, spec.ErrProviderNotFound
 	}
 
-	return p.RunScript(ctx, k, args.Path, args.Args, args.Env, args.Workdir)
+	return p.RunScript(ctx, k, args.ScriptLocation, args.Args, args.Env, args.WorkDir)
 }

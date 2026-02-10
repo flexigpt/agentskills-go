@@ -9,11 +9,11 @@ import (
 type AvailableSkillItem struct {
 	Name        string `xml:"name"`
 	Description string `xml:"description"`
-	Path        string `xml:"path"`
+	Location    string `xml:"location"`
 }
 
 type availableSkills struct {
-	XMLName xml.Name             `xml:"available_skills"`
+	XMLName xml.Name             `xml:"availableSkills"`
 	Skills  []AvailableSkillItem `xml:"skill"`
 }
 
@@ -23,7 +23,7 @@ type ActiveSkillItem struct {
 }
 
 type activeSkills struct {
-	XMLName xml.Name          `xml:"active_skills"`
+	XMLName xml.Name          `xml:"activeSkills"`
 	Skills  []ActiveSkillItem `xml:"skill"`
 }
 
@@ -31,7 +31,7 @@ func AvailableSkillsXML(items []AvailableSkillItem) (string, error) {
 	sorted := append([]AvailableSkillItem(nil), items...)
 	sort.Slice(sorted, func(i, j int) bool {
 		if sorted[i].Name == sorted[j].Name {
-			return sorted[i].Path < sorted[j].Path
+			return sorted[i].Location < sorted[j].Location
 		}
 		return sorted[i].Name < sorted[j].Name
 	})
@@ -41,7 +41,7 @@ func AvailableSkillsXML(items []AvailableSkillItem) (string, error) {
 		out.Skills = append(out.Skills, AvailableSkillItem{
 			Name:        it.Name,
 			Description: it.Description,
-			Path:        it.Path,
+			Location:    it.Location,
 		})
 	}
 

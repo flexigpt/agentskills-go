@@ -81,7 +81,7 @@ func (c *memCatalog) add(k spec.SkillKey, body string) {
 	defer c.mu.Unlock()
 	c.recs[k] = spec.SkillRecord{Key: k, Description: "d-" + k.Name}
 	c.bodies[k] = body
-	c.handles[k] = spec.SkillHandle{Name: k.Name, Path: k.Path}
+	c.handles[k] = spec.SkillHandle{Name: k.Name, Location: k.Location}
 }
 
 type canonProvider struct {
@@ -92,10 +92,10 @@ type canonProvider struct {
 func (p *canonProvider) Type() string { return p.typ }
 
 func (p *canonProvider) Index(ctx context.Context, key spec.SkillKey) (spec.SkillRecord, error) {
-	if key.Path == "rel" {
-		key.Path = "abs"
+	if key.Location == "rel" {
+		key.Location = "abs"
 	}
-	if strings.TrimSpace(key.Type) == "" || strings.TrimSpace(key.Name) == "" || strings.TrimSpace(key.Path) == "" {
+	if strings.TrimSpace(key.Type) == "" || strings.TrimSpace(key.Name) == "" || strings.TrimSpace(key.Location) == "" {
 		return spec.SkillRecord{}, fmt.Errorf("%w: invalid", spec.ErrInvalidArgument)
 	}
 	return spec.SkillRecord{Key: key, Description: "d"}, nil
@@ -109,7 +109,7 @@ func (p *canonProvider) ReadResource(
 	ctx context.Context,
 	key spec.SkillKey,
 	resourcePath string,
-	encoding spec.ReadEncoding,
+	encoding spec.ReadResourceEncoding,
 ) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
 	return nil, spec.ErrInvalidArgument
 }

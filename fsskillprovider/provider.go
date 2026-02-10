@@ -144,11 +144,11 @@ func (p *Provider) Index(ctx context.Context, key spec.SkillKey) (spec.SkillReco
 	if strings.TrimSpace(key.Name) == "" {
 		return spec.SkillRecord{}, fmt.Errorf("%w: key.name is required", spec.ErrInvalidArgument)
 	}
-	if strings.TrimSpace(key.Path) == "" {
-		return spec.SkillRecord{}, fmt.Errorf("%w: key.path is required", spec.ErrInvalidArgument)
+	if strings.TrimSpace(key.Location) == "" {
+		return spec.SkillRecord{}, fmt.Errorf("%w: key.location is required", spec.ErrInvalidArgument)
 	}
 
-	root, err := canonicalRoot(key.Path)
+	root, err := canonicalRoot(key.Location)
 	if err != nil {
 		return spec.SkillRecord{}, err
 	}
@@ -167,7 +167,7 @@ func (p *Provider) Index(ctx context.Context, key spec.SkillKey) (spec.SkillReco
 		)
 	}
 
-	key.Path = root // normalize path in the returned record
+	key.Location = root // normalize path in the returned record
 
 	return spec.SkillRecord{
 		Key:         key,
@@ -184,7 +184,7 @@ func (p *Provider) LoadBody(ctx context.Context, key spec.SkillKey) (string, err
 	if key.Type != Type {
 		return "", fmt.Errorf("%w: wrong provider type: %q", spec.ErrInvalidArgument, key.Type)
 	}
-	root, err := canonicalRoot(key.Path)
+	root, err := canonicalRoot(key.Location)
 	if err != nil {
 		return "", err
 	}
@@ -194,8 +194,8 @@ func (p *Provider) LoadBody(ctx context.Context, key spec.SkillKey) (string, err
 func (p *Provider) ReadResource(
 	ctx context.Context,
 	key spec.SkillKey,
-	resourcePath string,
-	encoding spec.ReadEncoding,
+	resourceLocation string,
+	encoding spec.ReadResourceEncoding,
 ) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -203,21 +203,21 @@ func (p *Provider) ReadResource(
 	if key.Type != Type {
 		return nil, fmt.Errorf("%w: wrong provider type: %q", spec.ErrInvalidArgument, key.Type)
 	}
-	root, err := canonicalRoot(key.Path)
+	root, err := canonicalRoot(key.Location)
 	if err != nil {
 		return nil, err
 	}
 
-	if strings.TrimSpace(resourcePath) == "" {
-		return nil, fmt.Errorf("%w: resource path is required", spec.ErrInvalidArgument)
+	if strings.TrimSpace(resourceLocation) == "" {
+		return nil, fmt.Errorf("%w: resource location is required", spec.ErrInvalidArgument)
 	}
 
 	enc := encoding
 	if strings.TrimSpace(string(enc)) == "" {
-		enc = spec.ReadEncodingText
+		enc = spec.ReadResourceEncodingText
 	}
 	switch enc {
-	case spec.ReadEncodingText, spec.ReadEncodingBinary:
+	case spec.ReadResourceEncodingText, spec.ReadResourceEncodingBinary:
 	default:
 		return nil, fmt.Errorf("%w: unknown encoding: %q", spec.ErrInvalidArgument, enc)
 	}
@@ -235,7 +235,7 @@ func (p *Provider) ReadResource(
 	if err != nil {
 		return nil, err
 	}
-	return ft.ReadFile(ctx, fstool.ReadFileArgs{Path: resourcePath, Encoding: string(enc)})
+	return ft.ReadFile(ctx, fstool.ReadFileArgs{Path: resourceLocation, Encoding: string(enc)})
 }
 
 // RunScript
@@ -261,7 +261,7 @@ func (p *Provider) ReadResource(
 func (p *Provider) RunScript(
 	ctx context.Context,
 	key spec.SkillKey,
-	scriptPath string,
+	scriptLocation string,
 	args []string,
 	env map[string]string,
 	workdir string,
@@ -276,14 +276,14 @@ func (p *Provider) RunScript(
 		return spec.RunScriptOut{}, spec.ErrRunScriptUnsupported
 	}
 
-	root, err := canonicalRoot(key.Path)
+	root, err := canonicalRoot(key.Location)
 	if err != nil {
 		return spec.RunScriptOut{}, err
 	}
 
-	sp := strings.TrimSpace(scriptPath)
+	sp := strings.TrimSpace(scriptLocation)
 	if sp == "" {
-		return spec.RunScriptOut{}, fmt.Errorf("%w: script path is required", spec.ErrInvalidArgument)
+		return spec.RunScriptOut{}, fmt.Errorf("%w: script location is required", spec.ErrInvalidArgument)
 	}
 
 	et, err := exectool.NewExecTool(
@@ -309,7 +309,7 @@ func (p *Provider) RunScript(
 		return spec.RunScriptOut{}, errors.New("runscript returned nil result")
 	}
 	return spec.RunScriptOut{
-		Path:       sp, // keep skill-relative path in receipt
+		Location:   sp, // keep skill-relative path in receipt
 		ExitCode:   res.ExitCode,
 		Stdout:     res.Stdout,
 		Stderr:     res.Stderr,

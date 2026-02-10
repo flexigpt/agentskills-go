@@ -63,7 +63,7 @@
 
   ```go
   xml, _ := rt.AvailableSkillsPromptXML(nil)
-  // <available_skills> ... </available_skills>
+  // <availableSkills> ... </availableSkills>
   ```
 
 - Create a session and activate skills (progressive disclosure)
@@ -76,7 +76,7 @@
   _ = err
 
   activeXML, _ := rt.ActiveSkillsPromptXML(ctx, sid)
-  // <active_skills><skill name="hello-skill"><![CDATA[ ... SKILL.md body ... ]]></skill></active_skills>
+  // <activeSkills><skill name="hello-skill"><![CDATA[ ... SKILL.md body ... ]]></skill></activeSkills>
   ```
 
 - Create a tool registry for an LLM session

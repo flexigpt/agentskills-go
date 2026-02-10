@@ -81,7 +81,7 @@ func TestStore_PruneSkill(t *testing.T) {
 	t.Parallel()
 
 	cat := newMemCatalog()
-	k := spec.SkillKey{Type: "t", Name: "a", Path: "p1"}
+	k := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "p1"}}
 	cat.add(k, "ok")
 
 	st := NewStore(StoreConfig{

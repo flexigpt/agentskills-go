@@ -23,7 +23,7 @@ type fakeProvider struct {
 
 	indexFn    func(context.Context, spec.SkillKey) (spec.SkillRecord, error)
 	loadBodyFn func(context.Context, spec.SkillKey) (string, error)
-	readFn     func(context.Context, spec.SkillKey, string, spec.ReadEncoding) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error)
+	readFn     func(context.Context, spec.SkillKey, string, spec.ReadResourceEncoding) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error)
 	runFn      func(context.Context, spec.SkillKey, string, []string, map[string]string, string) (spec.RunScriptOut, error)
 }
 
@@ -49,7 +49,7 @@ func (p *fakeProvider) ReadResource(
 	ctx context.Context,
 	key spec.SkillKey,
 	resourcePath string,
-	encoding spec.ReadEncoding,
+	encoding spec.ReadResourceEncoding,
 ) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
 	if p.readFn != nil {
 		return p.readFn(ctx, key, resourcePath, encoding)
@@ -188,7 +188,7 @@ func TestRuntime_AddRemoveListAndSessionActivation(t *testing.T) {
 		typ: "fake",
 		indexFn: func(ctx context.Context, key spec.SkillKey) (spec.SkillRecord, error) {
 			// Normalize path in the returned record.
-			key.Path = "NORM:" + key.Path
+			key.Location = "NORM:" + key.Location
 			return spec.SkillRecord{
 				Key:         key,
 				Description: "d-" + key.Name,
@@ -212,15 +212,18 @@ func TestRuntime_AddRemoveListAndSessionActivation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	t.Cleanup(cancel)
 
-	rec, err := rt.AddSkill(ctx, spec.SkillKey{Type: "fake", Name: "s1", Path: "/p1"})
+	rec, err := rt.AddSkill(
+		ctx,
+		spec.SkillKey{Type: "fake", SkillHandle: spec.SkillHandle{Name: "s1", Location: "/p1"}},
+	)
 	if err != nil {
 		t.Fatalf("AddSkill: %v", err)
 	}
-	if rec.Key.Path == "/p1" || !strings.HasPrefix(rec.Key.Path, "NORM:") {
-		t.Fatalf("expected normalized path in record, got: %q", rec.Key.Path)
+	if rec.Key.Location == "/p1" || !strings.HasPrefix(rec.Key.Location, "NORM:") {
+		t.Fatalf("expected normalized path in record, got: %q", rec.Key.Location)
 	}
 
-	_, _ = rt.AddSkill(ctx, spec.SkillKey{Type: "fake", Name: "s2", Path: "/p2"})
+	_, _ = rt.AddSkill(ctx, spec.SkillKey{Type: "fake", SkillHandle: spec.SkillHandle{Name: "s2", Location: "/p2"}})
 	all := rt.ListSkills(nil)
 	if len(all) != 2 {
 		t.Fatalf("expected 2 skills, got %d", len(all))
@@ -249,7 +252,7 @@ func TestRuntime_AddRemoveListAndSessionActivation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ActiveSkillsPromptXML: %v", err)
 	}
-	if !strings.Contains(ax, "<active_skills") || !strings.Contains(ax, "SKILL BODY") {
+	if !strings.Contains(ax, "<activeSkills") || !strings.Contains(ax, "SKILL BODY") {
 		t.Fatalf("unexpected active XML: %s", ax)
 	}
 

@@ -29,8 +29,8 @@ type entry struct {
 }
 
 type handleKey struct {
-	Name string
-	Path string
+	Name     string
+	Location string
 }
 
 type Catalog struct {
@@ -55,9 +55,9 @@ func (c *Catalog) Add(ctx context.Context, key spec.SkillKey) (spec.SkillRecord,
 		return spec.SkillRecord{}, err
 	}
 
-	if strings.TrimSpace(key.Type) == "" || strings.TrimSpace(key.Name) == "" || strings.TrimSpace(key.Path) == "" {
+	if strings.TrimSpace(key.Type) == "" || strings.TrimSpace(key.Name) == "" || strings.TrimSpace(key.Location) == "" {
 		return spec.SkillRecord{}, fmt.Errorf(
-			"%w: key.type, key.name, and key.path are required",
+			"%w: key.type, key.name, and key.location are required",
 			spec.ErrInvalidArgument,
 		)
 	}
@@ -75,7 +75,7 @@ func (c *Catalog) Add(ctx context.Context, key spec.SkillKey) (spec.SkillRecord,
 		return spec.SkillRecord{}, err
 	}
 
-	// Provider is allowed to normalize Path, but must not change Type/Name identity.
+	// Provider is allowed to normalize Location, but must not change Type/Name identity.
 	if rec.Key.Type != key.Type {
 		return spec.SkillRecord{}, fmt.Errorf("%w: provider changed key.type from %q to %q",
 			spec.ErrInvalidArgument, key.Type, rec.Key.Type)
@@ -86,7 +86,7 @@ func (c *Catalog) Add(ctx context.Context, key spec.SkillKey) (spec.SkillRecord,
 	}
 
 	if strings.TrimSpace(rec.Key.Type) == "" || strings.TrimSpace(rec.Key.Name) == "" ||
-		strings.TrimSpace(rec.Key.Path) == "" {
+		strings.TrimSpace(rec.Key.Location) == "" {
 		return spec.SkillRecord{}, fmt.Errorf("%w: provider returned invalid record key", spec.ErrInvalidArgument)
 	}
 
@@ -101,7 +101,7 @@ func (c *Catalog) Add(ctx context.Context, key spec.SkillKey) (spec.SkillRecord,
 	// If a provider pre-populates SkillMDBody we treat it as already loaded
 	// only when non-empty. (With the current data model, empty-but-loaded
 	// cannot be distinguished from not-yet-loaded.)
-	e.bodyLoaded = rec.SkillMDBody != ""
+	e.bodyLoaded = rec.SkillBody != ""
 	c.byKey[rec.Key] = e
 
 	c.recomputeLLMNamesLocked()
@@ -162,7 +162,7 @@ func (c *Catalog) HandleForKey(key spec.SkillKey) (spec.SkillHandle, bool) {
 	if !ok {
 		return spec.SkillHandle{}, false
 	}
-	return spec.SkillHandle{Name: e.llmName, Path: e.rec.Key.Path}, true
+	return spec.SkillHandle{Name: e.llmName, Location: e.rec.Key.Location}, true
 }
 
 func (c *Catalog) EnsureBody(ctx context.Context, key spec.SkillKey) (string, error) {
@@ -181,7 +181,7 @@ func (c *Catalog) EnsureBody(ctx context.Context, key spec.SkillKey) (string, er
 			return "", spec.ErrSkillNotFound
 		}
 		if e.bodyLoaded {
-			body := e.rec.SkillMDBody
+			body := e.rec.SkillBody
 			c.mu.Unlock()
 			return body, nil
 		}
@@ -236,14 +236,14 @@ func (c *Catalog) ListRecords(f Filter) []spec.SkillRecord {
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Key.Name == out[j].Key.Name {
-			return out[i].Key.Path < out[j].Key.Path
+			return out[i].Key.Location < out[j].Key.Location
 		}
 		return out[i].Key.Name < out[j].Key.Name
 	})
 	return out
 }
 
-// AvailableSkillsPromptXML builds <available_skills> XML for system prompts.
+// AvailableSkillsPromptXML builds <availableSkills> XML for system prompts.
 func (c *Catalog) AvailableSkillsPromptXML(f Filter) (string, error) {
 	c.mu.RLock()
 	items := make([]AvailableSkillItem, 0, len(c.byKey))
@@ -254,7 +254,7 @@ func (c *Catalog) AvailableSkillsPromptXML(f Filter) (string, error) {
 		items = append(items, AvailableSkillItem{
 			Name:        e.llmName,
 			Description: e.rec.Description,
-			Path:        e.rec.Key.Path,
+			Location:    e.rec.Key.Location,
 		})
 	}
 	c.mu.RUnlock()
@@ -263,19 +263,19 @@ func (c *Catalog) AvailableSkillsPromptXML(f Filter) (string, error) {
 }
 
 // Conflict handling / name computation.
-// Rule: LLM sees (name + path). Normally "name" is key.Name.
-// Only when there is a collision on (Name, Path) across different providers,
+// Rule: LLM sees (name + location). Normally "name" is key.Name.
+// Only when there is a collision on (Name, Location) across different providers,
 // we use "<type>:<name>" for all in that collision group.
 // If collision still exists, append "#<shortHash>".
 func (c *Catalog) recomputeLLMNamesLocked() {
-	// Base groups by (Name, Path) (no type).
+	// Base groups by (Name, Location) (no type).
 	type groupKey struct {
-		Name string
-		Path string
+		Name     string
+		Location string
 	}
 	groups := map[groupKey][]*entry{}
 	for _, e := range c.byKey {
-		gk := groupKey{Name: e.rec.Key.Name, Path: e.rec.Key.Path}
+		gk := groupKey{Name: e.rec.Key.Name, Location: e.rec.Key.Location}
 		groups[gk] = append(groups[gk], e)
 	}
 
@@ -285,19 +285,19 @@ func (c *Catalog) recomputeLLMNamesLocked() {
 			grp[0].llmName = grp[0].rec.Key.Name
 			continue
 		}
-		// Collision group on (Name, Path): disambiguate by type for *all* in group.
+		// Collision group on (Name, Location): disambiguate by type for *all* in group.
 		for _, e := range grp {
 			e.llmName = e.rec.Key.Type + ":" + e.rec.Key.Name
 		}
 	}
 
-	// Second pass: ensure uniqueness on (llmName, path).
+	// Second pass: ensure uniqueness on (llmName, location).
 	count := map[string]int{}
 	for _, e := range c.byKey {
-		count[e.llmName+"\x00"+e.rec.Key.Path]++
+		count[e.llmName+"\x00"+e.rec.Key.Location]++
 	}
 	for _, e := range c.byKey {
-		k := e.llmName + "\x00" + e.rec.Key.Path
+		k := e.llmName + "\x00" + e.rec.Key.Location
 
 		if count[k] > 1 {
 			e.llmName = fmt.Sprintf("%s:%s#%s", e.rec.Key.Type, e.rec.Key.Name, shortHash(e.rec.Key))
@@ -307,7 +307,7 @@ func (c *Catalog) recomputeLLMNamesLocked() {
 	// Rebuild handle index.
 	c.handleIndex = map[handleKey]spec.SkillKey{}
 	for _, e := range c.byKey {
-		c.handleIndex[handleKey{Name: e.llmName, Path: e.rec.Key.Path}] = e.rec.Key
+		c.handleIndex[handleKey{Name: e.llmName, Location: e.rec.Key.Location}] = e.rec.Key
 	}
 }
 
@@ -336,19 +336,19 @@ func (c *Catalog) finishBodyLoad(key spec.SkillKey, ch chan struct{}, body strin
 		return
 	}
 
-	e.rec.SkillMDBody = body
+	e.rec.SkillBody = body
 	e.bodyLoaded = true
 	e.bodyErr = nil
 }
 
 func normHandle(h spec.SkillHandle) handleKey {
 	return handleKey{
-		Name: strings.TrimSpace(h.Name),
-		Path: strings.TrimSpace(h.Path),
+		Name:     strings.TrimSpace(h.Name),
+		Location: strings.TrimSpace(h.Location),
 	}
 }
 
 func shortHash(k spec.SkillKey) string {
-	sum := sha256.Sum256([]byte(k.Type + "\x00" + k.Name + "\x00" + k.Path))
+	sum := sha256.Sum256([]byte(k.Type + "\x00" + k.Name + "\x00" + k.Location))
 	return hex.EncodeToString(sum[:])[:8]
 }

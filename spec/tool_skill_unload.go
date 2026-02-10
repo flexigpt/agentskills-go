@@ -2,7 +2,7 @@ package spec
 
 import llmtoolsgoSpec "github.com/flexigpt/llmtools-go/spec"
 
-const FuncIDSkillsUnload llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/spec/tools.skills.unload"
+const FuncIDSkillsUnload llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/skills.unload"
 
 func SkillsUnloadTool() llmtoolsgoSpec.Tool {
 	return llmtoolsgoSpec.Tool{
@@ -11,41 +11,41 @@ func SkillsUnloadTool() llmtoolsgoSpec.Tool {
 		Slug:          "skills.unload",
 		Version:       "v1.0.0",
 		DisplayName:   "Skills Unload",
-		Description:   "Unload skills from the current session. Uses (name + path) handles; session-bound (no sessionID arg).",
+		Description:   "unload skills from the current session",
 		Tags:          []string{"skills"},
 		ArgSchema: llmtoolsgoSpec.JSONSchema(`{
-  "$schema":"http://json-schema.org/draft-07/schema#",
-  "type":"object",
-  "definitions":{
-    "skill_handle":{
-      "type":"object",
-      "properties":{
-        "name":{"type":"string"},
-        "path":{"type":"string"}
-      },
-      "required":["name","path"],
-      "additionalProperties":false
-    }
-  },
-  "properties":{
-    "skills":{"type":"array","items":{"$ref":"#/definitions/skill_handle"}},
-    "all":{"type":"boolean","default":false}
-  },
-	"anyOf":[
-    {
-      "required":["all"],
-      "properties":{
-        "all":{"const":true}
-      }
-    },
-    {
-      "required":["skills"],
-      "properties":{
-        "skills":{"minItems":1}
-      }
-    }
-  ],
-  "additionalProperties":false
+"$schema":"http://json-schema.org/draft-07/schema#",
+"type":"object",
+"properties":{
+	"skills":{
+		"type":"array",
+		"items":{
+			"type":"object",
+			"properties":{
+				"name":{"type":"string","description":"skill name"},
+				"location":{"type":"string","description":"provider-interpreted base location for the skill"}
+			},
+			"required":["name","location"],
+			"additionalProperties":false
+		}
+	},
+	"all":{
+		"type":"boolean",
+		"default":false,
+		"description":"if true, unload all active skills"
+	}
+},
+"anyOf":[
+	{
+		"required":["all"],
+		"properties":{"all":{"const":true}}
+	},
+	{
+		"required":["skills"],
+		"properties":{"skills":{"minItems":1}}
+	}
+],
+"additionalProperties":false
 }`),
 		GoImpl:     llmtoolsgoSpec.GoToolImpl{FuncID: FuncIDSkillsUnload},
 		CreatedAt:  llmtoolsgoSpec.SchemaStartTime,

@@ -18,7 +18,7 @@ type recordingProvider struct {
 
 	lastReadKey     spec.SkillKey
 	lastReadPath    string
-	lastReadEnc     spec.ReadEncoding
+	lastReadEnc     spec.ReadResourceEncoding
 	readCalls       int
 	lastRunKey      spec.SkillKey
 	lastRunPath     string
@@ -41,7 +41,7 @@ func (p *recordingProvider) ReadResource(
 	ctx context.Context,
 	key spec.SkillKey,
 	resourcePath string,
-	encoding spec.ReadEncoding,
+	encoding spec.ReadResourceEncoding,
 ) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -71,15 +71,15 @@ func (p *recordingProvider) RunScript(
 	if p.runReturnError != nil {
 		return spec.RunScriptOut{}, p.runReturnError
 	}
-	return spec.RunScriptOut{Path: scriptPath, ExitCode: 0}, nil
+	return spec.RunScriptOut{Location: scriptPath, ExitCode: 0}, nil
 }
 
 func TestTools_Read_DefaultSkillSelection(t *testing.T) {
 	t.Parallel()
 
 	cat := newMemCatalog()
-	k1 := spec.SkillKey{Type: "t", Name: "a", Path: "p1"}
-	k2 := spec.SkillKey{Type: "t", Name: "b", Path: "p2"}
+	k1 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "p1"}}
+	k2 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "b", Location: "p2"}}
 	cat.add(k1, "ok")
 	cat.add(k2, "ok")
 
@@ -98,13 +98,18 @@ func TestTools_Read_DefaultSkillSelection(t *testing.T) {
 		t.Fatalf("ActivateKeys: %v", err)
 	}
 
-	_, err = s.toolRead(t.Context(), spec.ReadArgs{Path: "x.txt", Skill: handles[0]})
+	_, err = s.toolRead(t.Context(), spec.ReadResourceArgs{
+		SkillName:        handles[0].Name,
+		SkillLocation:    handles[0].Location,
+		ResourceLocation: "x.txt",
+	})
 	if err != nil {
 		t.Fatalf("toolRead: %v", err)
 	}
 
 	p.mu.Lock()
-	if p.readCalls != 1 || p.lastReadKey != k1 || p.lastReadPath != "x.txt" || p.lastReadEnc != spec.ReadEncodingText {
+	if p.readCalls != 1 || p.lastReadKey != k1 || p.lastReadPath != "x.txt" ||
+		p.lastReadEnc != spec.ReadResourceEncodingText {
 		t.Fatalf(
 			"unexpected provider call: calls=%d key=%+v path=%q enc=%q",
 			p.readCalls,
@@ -121,13 +126,16 @@ func TestTools_Read_DefaultSkillSelection(t *testing.T) {
 		t.Fatalf("ActivateKeys: %v", err)
 	}
 
-	_, err = s.toolRead(t.Context(), spec.ReadArgs{Path: "x.txt"})
+	_, err = s.toolRead(t.Context(), spec.ReadResourceArgs{ResourceLocation: "x.txt"})
 	if !errors.Is(err, spec.ErrInvalidArgument) {
 		t.Fatalf("expected ErrInvalidArgument when multiple active and no skill, got %v", err)
 	}
 
 	// Explicit skill handle works.
-	_, err = s.toolRead(t.Context(), spec.ReadArgs{Skill: spec.SkillHandle{Name: "b", Path: "p2"}, Path: "y.txt"})
+	_, err = s.toolRead(
+		t.Context(),
+		spec.ReadResourceArgs{SkillName: "b", SkillLocation: "p2", ResourceLocation: "y.txt"},
+	)
 	if err != nil {
 		t.Fatalf("toolRead explicit: %v", err)
 	}
@@ -137,7 +145,7 @@ func TestTools_RunScript_DefaultSkillSelection(t *testing.T) {
 	t.Parallel()
 
 	cat := newMemCatalog()
-	k1 := spec.SkillKey{Type: "t", Name: "a", Path: "p1"}
+	k1 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "p1"}}
 	cat.add(k1, "ok")
 
 	p := &recordingProvider{typ: "t"}
@@ -154,11 +162,15 @@ func TestTools_RunScript_DefaultSkillSelection(t *testing.T) {
 		t.Fatalf("ActivateKeys: %v", err)
 	}
 
-	res, err := s.toolRunScript(t.Context(), spec.RunScriptArgs{Path: "scripts/x.sh", Skill: handles[0]})
+	res, err := s.toolRunScript(t.Context(), spec.RunScriptArgs{
+		SkillName:      handles[0].Name,
+		SkillLocation:  handles[0].Location,
+		ScriptLocation: "scripts/x.sh",
+	})
 	if err != nil {
 		t.Fatalf("toolRunScript: %v", err)
 	}
-	if res.ExitCode != 0 || res.Path != "scripts/x.sh" {
+	if res.ExitCode != 0 || res.Location != "scripts/x.sh" {
 		t.Fatalf("unexpected run result: %+v", res)
 	}
 }

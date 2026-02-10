@@ -135,7 +135,7 @@ func (s *Session) ActivateKeys(
 	}
 
 	// Validate keys exist in catalog (and dedupe).
-	// Robustness: if key.Path is not canonical, attempt to canonicalize via provider.Index and
+	// Robustness: if key.Location is not canonical, attempt to canonicalize via provider.Index and
 	// then match against catalog using the normalized key.
 	req := make([]spec.SkillKey, 0, len(keys))
 	seen := map[spec.SkillKey]struct{}{}

@@ -24,8 +24,8 @@ type SkillFilter struct {
 	// NamePrefix restricts to LLM-visible names with this prefix.
 	NamePrefix string
 
-	// PathPrefix restricts to skills whose base path starts with this prefix.
-	PathPrefix string
+	// LocationPrefix restricts to skills whose base location starts with this prefix.
+	LocationPrefix string
 }
 
 type Runtime struct {
@@ -286,8 +286,8 @@ func toCatalogFilter(f *SkillFilter) catalog.Filter {
 		return catalog.Filter{}
 	}
 	return catalog.Filter{
-		Types:      append([]string(nil), f.Types...),
-		NamePrefix: f.NamePrefix,
-		PathPrefix: f.PathPrefix,
+		Types:          append([]string(nil), f.Types...),
+		NamePrefix:     f.NamePrefix,
+		LocationPrefix: f.LocationPrefix,
 	}
 }

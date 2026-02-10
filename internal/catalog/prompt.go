@@ -4,9 +4,9 @@ import "slices"
 
 // Filter is used for listing/prompting skills.
 type Filter struct {
-	Types      []string
-	NamePrefix string
-	PathPrefix string
+	Types          []string
+	NamePrefix     string
+	LocationPrefix string
 }
 
 func (f Filter) match(e *entry) bool {
@@ -27,11 +27,11 @@ func (f Filter) match(e *entry) bool {
 		return false
 	}
 
-	if f.PathPrefix != "" && len(e.rec.Key.Path) >= len(f.PathPrefix) {
-		if e.rec.Key.Path[:len(f.PathPrefix)] != f.PathPrefix {
+	if f.LocationPrefix != "" && len(e.rec.Key.Location) >= len(f.LocationPrefix) {
+		if e.rec.Key.Location[:len(f.LocationPrefix)] != f.LocationPrefix {
 			return false
 		}
-	} else if f.PathPrefix != "" {
+	} else if f.LocationPrefix != "" {
 		return false
 	}
 
