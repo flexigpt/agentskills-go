@@ -13,18 +13,18 @@ type AvailableSkillItem struct {
 }
 
 type availableSkills struct {
-	XMLName xml.Name             `xml:"availableSkills"`
-	Skills  []AvailableSkillItem `xml:"skill"`
+	XMLName xml.Name             `xml:"availableSkills"` //nolint:tagliatelle // XML specific thing.
+	Skills  []AvailableSkillItem `xml:"skill"`           //nolint:tagliatelle // XML specific thing.
 }
 
 type ActiveSkillItem struct {
 	Name string `xml:"name,attr"`
-	Body string `xml:",cdata"`
+	Body string `xml:",cdata"` //nolint:tagliatelle // Cannot specify name along with cdata.
 }
 
 type activeSkills struct {
-	XMLName xml.Name          `xml:"activeSkills"`
-	Skills  []ActiveSkillItem `xml:"skill"`
+	XMLName xml.Name          `xml:"activeSkills"` //nolint:tagliatelle // XML specific thing.
+	Skills  []ActiveSkillItem `xml:"skill"`        //nolint:tagliatelle // XML specific thing.
 }
 
 func AvailableSkillsXML(items []AvailableSkillItem) (string, error) {

@@ -22,6 +22,7 @@ func TestAvailableSkillsXML_SortsAndEscapes(t *testing.T) {
 	if !strings.Contains(s, "<availableSkills") {
 		t.Fatalf("unexpected xml: %s", s)
 	}
+	t.Log(s)
 
 	var decoded availableSkills
 	if err := xml.Unmarshal([]byte(s), &decoded); err != nil {
