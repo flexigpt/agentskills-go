@@ -300,7 +300,7 @@ func (p *Provider) RunScript(
 		Path:    sp,
 		Args:    args,
 		Env:     env,
-		Workdir: workdir,
+		WorkDir: workdir,
 	})
 	if err != nil {
 		return spec.RunScriptOut{}, err
