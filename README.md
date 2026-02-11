@@ -31,7 +31,7 @@
   - `providers/fsskillprovider`: skills backed by a local filesystem directory
 
 - Tool wiring via [`llmtools-go`](https://github.com/flexigpt/llmtools-go):
-  - `skills.load`, `skills.unload`, `skills.read`, `skills.run_script`
+  - `skills.load`, `skills.unload`, `skills.read`, `skills.runscript`
 
 ## Filesystem skill provider
 
@@ -53,7 +53,8 @@
   rec, err := rt.AddSkill(ctx, spec.SkillKey{
     Type: "fs",
     Name: "hello-skill",
-    Path: "/abs/path/to/hello-skill",
+    // This is base dir or SKILLS.md with name "hello-skill", note that base dir name and skill name should be same.
+    Location: "/abs/path/to/hello-skill",
   })
   _ = rec
   _ = err
@@ -83,7 +84,7 @@
 
   ```go
   reg, _ := rt.NewSessionRegistry(ctx, sid)
-  // Registry includes: skills.load / skills.unload / skills.read / skills.run_script
+  // Registry includes: skills.load / skills.unload / skills.read / skills.runscript
   _ = reg
   ```
 
