@@ -23,7 +23,7 @@ type fakeProvider struct {
 
 	indexFn    func(context.Context, spec.SkillKey) (spec.SkillRecord, error)
 	loadBodyFn func(context.Context, spec.SkillKey) (string, error)
-	readFn     func(context.Context, spec.SkillKey, string, spec.ReadResourceEncoding) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error)
+	readFn     func(context.Context, spec.SkillKey, string, spec.ReadResourceEncoding) ([]llmtoolsgoSpec.ToolOutputUnion, error)
 	runFn      func(context.Context, spec.SkillKey, string, []string, map[string]string, string) (spec.RunScriptOut, error)
 }
 
@@ -50,7 +50,7 @@ func (p *fakeProvider) ReadResource(
 	key spec.SkillKey,
 	resourcePath string,
 	encoding spec.ReadResourceEncoding,
-) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
+) ([]llmtoolsgoSpec.ToolOutputUnion, error) {
 	if p.readFn != nil {
 		return p.readFn(ctx, key, resourcePath, encoding)
 	}

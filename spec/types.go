@@ -128,7 +128,7 @@ type SkillProvider interface {
 		key SkillKey,
 		resourceLocation string,
 		encoding ReadResourceEncoding,
-	) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error)
+	) ([]llmtoolsgoSpec.ToolOutputUnion, error)
 
 	// RunScript executes a script relative to the skill base location.
 	// Providers define/enforce constraints (e.g. must be under scripts/).

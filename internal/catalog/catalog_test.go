@@ -52,7 +52,7 @@ func (p *provider) ReadResource(
 	key spec.SkillKey,
 	resourcePath string,
 	encoding spec.ReadResourceEncoding,
-) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
+) ([]llmtoolsgoSpec.ToolOutputUnion, error) {
 	return nil, spec.ErrInvalidArgument
 }
 

@@ -42,7 +42,7 @@ func (p *recordingProvider) ReadResource(
 	key spec.SkillKey,
 	resourcePath string,
 	encoding spec.ReadResourceEncoding,
-) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
+) ([]llmtoolsgoSpec.ToolOutputUnion, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.readCalls++
@@ -52,7 +52,7 @@ func (p *recordingProvider) ReadResource(
 	if p.readReturnError != nil {
 		return nil, p.readReturnError
 	}
-	return []llmtoolsgoSpec.ToolStoreOutputUnion{}, nil
+	return []llmtoolsgoSpec.ToolOutputUnion{}, nil
 }
 
 func (p *recordingProvider) RunScript(

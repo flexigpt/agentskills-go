@@ -152,7 +152,7 @@ func (s *Session) toolUnload(ctx context.Context, args spec.UnloadArgs) (spec.Un
 func (s *Session) toolRead(
 	ctx context.Context,
 	args spec.ReadResourceArgs,
-) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
+) ([]llmtoolsgoSpec.ToolOutputUnion, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

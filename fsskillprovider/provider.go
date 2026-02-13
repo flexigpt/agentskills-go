@@ -196,7 +196,7 @@ func (p *Provider) ReadResource(
 	key spec.SkillKey,
 	resourceLocation string,
 	encoding spec.ReadResourceEncoding,
-) ([]llmtoolsgoSpec.ToolStoreOutputUnion, error) {
+) ([]llmtoolsgoSpec.ToolOutputUnion, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
