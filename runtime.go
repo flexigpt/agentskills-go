@@ -238,32 +238,6 @@ func (r *Runtime) CloseSession(ctx context.Context, sid spec.SessionID) error {
 	return nil
 }
 
-func (r *Runtime) NewSessionRegistry(
-	ctx context.Context,
-	sid spec.SessionID,
-	opts ...llmtools.RegistryOption,
-) (*llmtools.Registry, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	s, ok := r.sessions.Get(string(sid))
-	if !ok {
-		return nil, spec.ErrSessionNotFound
-	}
-	return s.NewRegistry(opts...)
-}
-
-func (r *Runtime) ActiveSkillsPromptXML(ctx context.Context, sid spec.SessionID) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	s, ok := r.sessions.Get(string(sid))
-	if !ok {
-		return "", spec.ErrSessionNotFound
-	}
-	return s.ActiveSkillsPromptXML(ctx)
-}
-
 // SessionActivateKeys is a host API to activate skills by internal keys (bypasses LLM handle resolution).
 func (r *Runtime) SessionActivateKeys(
 	ctx context.Context,
@@ -279,6 +253,32 @@ func (r *Runtime) SessionActivateKeys(
 		return nil, spec.ErrSessionNotFound
 	}
 	return s.ActivateKeys(ctx, keys, mode)
+}
+
+func (r *Runtime) ActiveSkillsPromptXML(ctx context.Context, sid spec.SessionID) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	s, ok := r.sessions.Get(string(sid))
+	if !ok {
+		return "", spec.ErrSessionNotFound
+	}
+	return s.ActiveSkillsPromptXML(ctx)
+}
+
+func (r *Runtime) NewSessionRegistry(
+	ctx context.Context,
+	sid spec.SessionID,
+	opts ...llmtools.RegistryOption,
+) (*llmtools.Registry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s, ok := r.sessions.Get(string(sid))
+	if !ok {
+		return nil, spec.ErrSessionNotFound
+	}
+	return s.NewRegistry(opts...)
 }
 
 func toCatalogFilter(f *SkillFilter) catalog.Filter {

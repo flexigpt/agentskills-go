@@ -24,4 +24,7 @@ var (
 
 	// ErrSessionNotFound indicates the requested session does not exist.
 	ErrSessionNotFound = errors.New("session not found")
+
+	// ErrSkillNotAllowed indicates the requested skill is not permitted by the session allowlist.
+	ErrSkillNotAllowed = errors.New("skill not allowed")
 )
