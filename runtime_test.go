@@ -248,7 +248,9 @@ func TestRuntime_AddRemoveListAndSessionActivation(t *testing.T) {
 		t.Fatalf("expected 1 handle, got %d", len(handles))
 	}
 
-	ax, err := rt.ActiveSkillsPromptXML(ctx, sid)
+	ax, err := rt.SkillsPromptXML(ctx, &SkillFilter{
+		SessionID: sid,
+	})
 	if err != nil {
 		t.Fatalf("ActiveSkillsPromptXML: %v", err)
 	}
@@ -261,7 +263,9 @@ func TestRuntime_AddRemoveListAndSessionActivation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RemoveSkill: %v", err)
 	}
-	_, err = rt.ActiveSkillsPromptXML(ctx, sid)
+	_, err = rt.SkillsPromptXML(ctx, &SkillFilter{
+		SessionID: sid,
+	})
 	if err != nil && !errors.Is(err, spec.ErrSessionNotFound) {
 		// Session still exists, but the skill is pruned; ActiveSkillsPromptXML should succeed with empty list.
 		// If it errors, it must not be "skill not found" leaking; this is a regression guard.

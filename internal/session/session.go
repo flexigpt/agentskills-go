@@ -109,6 +109,41 @@ func (s *Session) ActiveSkillsPromptXML(ctx context.Context) (string, error) {
 	return catalog.ActiveSkillsXML(items)
 }
 
+// ActiveKeys returns the session's active skill keys in activation order.
+//
+// It also prunes keys that no longer exist in the catalog (mirroring the behavior of
+// ActiveSkillsPromptXML), so callers don't need to handle removed-skills drift.
+func (s *Session) ActiveKeys(ctx context.Context) ([]spec.SkillKey, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	s.touchSession()
+	if s.isClosed() {
+		return nil, spec.ErrSessionNotFound
+	}
+
+	s.mu.Lock()
+	order := append([]spec.SkillKey(nil), s.activeOrder...)
+	s.mu.Unlock()
+
+	out := make([]spec.SkillKey, 0, len(order))
+	missing := make([]spec.SkillKey, 0)
+	for _, k := range order {
+		// If removed from catalog, prune from session.
+		if _, ok := s.catalog.HandleForKey(k); !ok {
+			missing = append(missing, k)
+			continue
+		}
+		out = append(out, k)
+	}
+
+	if len(missing) > 0 {
+		s.pruneKeys(missing)
+	}
+	return out, nil
+}
+
 func (s *Session) ActivateKeys(
 	ctx context.Context,
 	keys []spec.SkillKey,

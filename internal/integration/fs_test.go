@@ -72,7 +72,7 @@ func TestRuntime_FSProvider_EndToEnd(t *testing.T) {
 	}
 
 	// Available skills prompt (metadata only).
-	availXML, err := rt.AvailableSkillsPromptXML(nil)
+	availXML, err := rt.SkillsPromptXML(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("available prompt xml: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestRuntime_FSProvider_EndToEnd(t *testing.T) {
 		t.Fatalf("expected 1 active handle, got %d", len(handles))
 	}
 
-	activeXML, err := rt.ActiveSkillsPromptXML(ctx, sid)
+	activeXML, err := rt.SkillsPromptXML(ctx, &agentskills.SkillFilter{SessionID: sid})
 	if err != nil {
 		t.Fatalf("active prompt xml: %v", err)
 	}

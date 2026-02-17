@@ -16,18 +16,6 @@ import (
 	"github.com/flexigpt/agentskills-go/spec"
 )
 
-// SkillFilter is an optional filter for listing/prompting skills.
-type SkillFilter struct {
-	// Types restricts to provider types (e.g. ["fs"]). Empty means "all".
-	Types []string
-
-	// NamePrefix restricts to LLM-visible names with this prefix.
-	NamePrefix string
-
-	// LocationPrefix restricts to skills whose base location starts with this prefix.
-	LocationPrefix string
-}
-
 type Runtime struct {
 	logger *slog.Logger
 
@@ -212,10 +200,6 @@ func (r *Runtime) ListSkills(filter *SkillFilter) []spec.SkillRecord {
 	return r.catalog.ListRecords(toCatalogFilter(filter))
 }
 
-func (r *Runtime) AvailableSkillsPromptXML(filter *SkillFilter) (string, error) {
-	return r.catalog.AvailableSkillsPromptXML(toCatalogFilter(filter))
-}
-
 func (r *Runtime) NewSession(ctx context.Context) (spec.SessionID, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -255,17 +239,6 @@ func (r *Runtime) SessionActivateKeys(
 	return s.ActivateKeys(ctx, keys, mode)
 }
 
-func (r *Runtime) ActiveSkillsPromptXML(ctx context.Context, sid spec.SessionID) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	s, ok := r.sessions.Get(string(sid))
-	if !ok {
-		return "", spec.ErrSessionNotFound
-	}
-	return s.ActiveSkillsPromptXML(ctx)
-}
-
 func (r *Runtime) NewSessionRegistry(
 	ctx context.Context,
 	sid spec.SessionID,
@@ -279,15 +252,4 @@ func (r *Runtime) NewSessionRegistry(
 		return nil, spec.ErrSessionNotFound
 	}
 	return s.NewRegistry(opts...)
-}
-
-func toCatalogFilter(f *SkillFilter) catalog.Filter {
-	if f == nil {
-		return catalog.Filter{}
-	}
-	return catalog.Filter{
-		Types:          append([]string(nil), f.Types...),
-		NamePrefix:     f.NamePrefix,
-		LocationPrefix: f.LocationPrefix,
-	}
 }
