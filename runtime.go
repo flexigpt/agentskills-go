@@ -54,11 +54,14 @@ func WithProvider(p spec.SkillProvider) Option {
 }
 
 func WithProviders(m map[string]spec.SkillProvider) Option {
+	// Snapshot input map at option-creation time to prevent caller mutation affecting New().
+	snap := maps.Clone(m)
+
 	return func(o *runtimeOptions) error {
 		if o.providersByType == nil {
 			o.providersByType = map[string]spec.SkillProvider{}
 		}
-		maps.Copy(o.providersByType, m)
+		maps.Copy(o.providersByType, snap)
 		return nil
 	}
 }
@@ -196,8 +199,70 @@ func (r *Runtime) RemoveSkill(ctx context.Context, key spec.SkillKey) (spec.Skil
 	return rec, nil
 }
 
-func (r *Runtime) ListSkills(filter *SkillFilter) []spec.SkillRecord {
-	return r.catalog.ListRecords(toCatalogFilter(filter))
+func (r *Runtime) ListSkills(ctx context.Context, filter *SkillFilter) ([]spec.SkillRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if r == nil {
+		return nil, fmt.Errorf("%w: nil runtime receiver", spec.ErrInvalidArgument)
+	}
+
+	cfg := normalizeSkillsPromptFilter(filter)
+
+	// Validate activity/session constraints early.
+	switch cfg.Activity {
+	case SkillActivityAny, SkillActivityInactive:
+		// OK.
+	case SkillActivityActive:
+		if cfg.SessionID == "" {
+			return nil, fmt.Errorf("%w: activity=active requires sessionID", spec.ErrInvalidArgument)
+		}
+	default:
+		return nil, fmt.Errorf("%w: invalid activity %q", spec.ErrInvalidArgument, cfg.Activity)
+	}
+
+	records := r.catalog.ListRecords(toCatalogFilter(&cfg))
+
+	// No session => no active skills exist; "inactive" behaves like "all".
+	if cfg.SessionID == "" {
+		return records, nil
+	}
+
+	// Session-scoped filtering.
+	s, ok := r.sessions.Get(string(cfg.SessionID))
+	if !ok {
+		return nil, spec.ErrSessionNotFound
+	}
+	keys, err := s.ActiveKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	activeSet := make(map[spec.SkillKey]struct{}, len(keys))
+	for _, k := range keys {
+		activeSet[k] = struct{}{}
+	}
+
+	if cfg.Activity == SkillActivityAny {
+		return records, nil
+	}
+
+	out := make([]spec.SkillRecord, 0, len(records))
+	for _, rec := range records {
+		_, isActive := activeSet[rec.Key]
+		switch cfg.Activity {
+		case SkillActivityActive:
+			if isActive {
+				out = append(out, rec)
+			}
+		case SkillActivityInactive:
+			if !isActive {
+				out = append(out, rec)
+			}
+		default:
+			// We filtered Any records above.
+		}
+	}
+	return out, nil
 }
 
 func (r *Runtime) NewSession(ctx context.Context) (spec.SessionID, error) {

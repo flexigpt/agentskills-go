@@ -2,10 +2,8 @@ package agentskills
 
 import (
 	"context"
-	"encoding/xml"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/flexigpt/agentskills-go/internal/catalog"
@@ -59,38 +57,15 @@ type SkillFilter struct {
 	Activity SkillActivity
 }
 
-type skillsPromptXML struct {
-	XMLName   xml.Name            `xml:"skillsPrompt"` //nolint:tagliatelle // XML Specific.
-	Available *availableSkillsXML `xml:"availableSkills,omitempty"`
-	Active    *activeSkillsXML    `xml:"activeSkills,omitempty"`
-}
-
-type availableSkillsXML struct {
-	Skills []availableSkillItemXML `xml:"skill"` //nolint:tagliatelle // XML Specific.
-}
-
-type availableSkillItemXML struct {
-	Name        string `xml:"name"`        //nolint:tagliatelle // XML Specific.
-	Description string `xml:"description"` //nolint:tagliatelle // XML Specific.
-	Location    string `xml:"location"`    //nolint:tagliatelle // XML Specific.
-}
-
-type activeSkillsXML struct {
-	Skills []activeSkillItemXML `xml:"skill"` //nolint:tagliatelle // XML Specific.
-}
-
-// NOTE: We intentionally avoid CDATA. "xml.Marshal" will escape markup safely and avoids the "]]>" CDATA terminator
-// edge-case.
-type activeSkillItemXML struct {
-	Name string `xml:"name,attr"` //nolint:tagliatelle // XML Specific.
-	Body string `xml:",chardata"`
-}
-
 // SkillsPromptXML is the single prompt API.
 //
-// Breaking change:
-//   - Replaces Runtime.AvailableSkillsPromptXML and Runtime.ActiveSkillsPromptXML.
-//   - Produces one XML document containing <availableSkills> and/or <activeSkills>.
+// Output compatibility rules (to preserve previous XML “standards” as much as possible):
+//   - If only one section is requested, the root is exactly one of:
+//   - <availableSkills>...</availableSkills>
+//   - <activeSkills>...</activeSkills>
+//     (matching the historical outputs from internal/catalog XML builders).
+//   - If both sections are requested simultaneously, the output is wrapped in:
+//     <skillsPrompt> ... </skillsPrompt>
 func (r *Runtime) SkillsPromptXML(ctx context.Context, f *SkillFilter) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -113,28 +88,8 @@ func (r *Runtime) SkillsPromptXML(ctx context.Context, f *SkillFilter) (string, 
 		return "", fmt.Errorf("%w: invalid activity %q", spec.ErrInvalidArgument, cfg.Activity)
 	}
 
-	// Build a catalog-filtered record set (this applies Types/NamePrefix/LocationPrefix/AllowKeys).
-	records := r.catalog.ListRecords(toCatalogFilter(&SkillFilter{
-		Types:          cfg.Types,
-		NamePrefix:     cfg.NamePrefix,
-		LocationPrefix: cfg.LocationPrefix,
-		AllowKeys:      cfg.AllowKeys,
-	}))
-
-	// Index by internal key for fast join with session-active keys.
-	type recAndHandle struct {
-		rec spec.SkillRecord
-		h   spec.SkillHandle
-	}
-	byKey := make(map[spec.SkillKey]recAndHandle, len(records))
-	for _, rec := range records {
-		h, ok := r.catalog.HandleForKey(rec.Key)
-		if !ok {
-			// Catalog mutation race: ignore.
-			continue
-		}
-		byKey[rec.Key] = recAndHandle{rec: rec, h: h}
-	}
+	// Base catalog filtering (Types/NamePrefix/LocationPrefix/AllowKeys).
+	records := r.catalog.ListRecords(toCatalogFilter(&cfg))
 
 	// Resolve session + active set (optional).
 	var activeOrder []spec.SkillKey
@@ -157,66 +112,86 @@ func (r *Runtime) SkillsPromptXML(ctx context.Context, f *SkillFilter) (string, 
 	includeActive := cfg.Activity == SkillActivityAny || cfg.Activity == SkillActivityActive
 	includeAvailable := cfg.Activity == SkillActivityAny || cfg.Activity == SkillActivityInactive
 
-	out := skillsPromptXML{}
+	// Active section: preserve historical CDATA encoding by reusing catalog.ActiveSkillsXML.
+	var activeXML string
 
-	// Active section (activation order).
 	if includeActive && cfg.SessionID != "" {
-		items := make([]activeSkillItemXML, 0, len(activeOrder))
+		// Build membership set for "records" (filtered catalog view), so active section
+		// respects the same filters.
+		filtered := make(map[spec.SkillKey]struct{}, len(records))
+		for _, rec := range records {
+			filtered[rec.Key] = struct{}{}
+		}
+		items := make([]catalog.ActiveSkillItem, 0, len(activeOrder))
 		for _, k := range activeOrder {
-			it, ok := byKey[k]
+			if _, ok := filtered[k]; !ok {
+				continue
+			}
+			h, ok := r.catalog.HandleForKey(k)
 			if !ok {
-				// Either filtered out, removed, or not in allowlist.
 				continue
 			}
 			body, err := r.catalog.EnsureBody(ctx, k)
 			if err != nil {
-				// If the skill disappeared concurrently, skip.
 				if errors.Is(err, spec.ErrSkillNotFound) {
 					continue
 				}
 				return "", err
 			}
-			items = append(items, activeSkillItemXML{
-				Name: it.h.Name,
-				Body: body,
-			})
+			items = append(items, catalog.ActiveSkillItem{Name: h.Name, Body: body})
 		}
-		out.Active = &activeSkillsXML{Skills: items}
+		var err error
+		activeXML, err = catalog.ActiveSkillsXML(items)
+		if err != nil {
+			return "", err
+		}
 	} else if cfg.Activity == SkillActivityActive {
-		// "activity=active" but no session keys (e.g. empty session): still emit the section.
-		out.Active = &activeSkillsXML{Skills: nil}
+		// Emit an empty <activeSkills>...</activeSkills> section for "active" queries.
+		var err error
+		activeXML, err = catalog.ActiveSkillsXML(nil)
+		if err != nil {
+			return "", err
+		}
 	}
 
-	// Available section (inactive when SessionID is set; otherwise all).
+	// Available section: reuse catalog.AvailableSkillsXML to preserve tag structure + ordering.
+	var availableXML string
 	if includeAvailable {
-		items := make([]availableSkillItemXML, 0, len(byKey))
-		for k, it := range byKey {
+		items := make([]catalog.AvailableSkillItem, 0, len(records))
+		for _, rec := range records {
 			if cfg.SessionID != "" {
-				if _, isActive := activeSet[k]; isActive {
-					// When a session is provided and ActivityAny/Inactive, "available" means inactive.
+				if _, isActive := activeSet[rec.Key]; isActive {
+					// With session + any/inactive, "available" means inactive.
 					continue
 				}
 			}
-			items = append(items, availableSkillItemXML{
-				Name:        it.h.Name,
-				Description: it.rec.Description,
-				Location:    it.h.Location,
+			h, ok := r.catalog.HandleForKey(rec.Key)
+			if !ok {
+				continue
+			}
+			items = append(items, catalog.AvailableSkillItem{
+				Name:        h.Name,
+				Description: rec.Description,
+				Location:    h.Location,
 			})
 		}
-		sort.Slice(items, func(i, j int) bool {
-			if items[i].Name == items[j].Name {
-				return items[i].Location < items[j].Location
-			}
-			return items[i].Name < items[j].Name
-		})
-		out.Available = &availableSkillsXML{Skills: items}
+		var err error
+		availableXML, err = catalog.AvailableSkillsXML(items)
+		if err != nil {
+			return "", err
+		}
 	}
 
-	b, err := xml.MarshalIndent(out, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("xml encode: %w", err)
+	// If only one section is requested, return it as the root (backward-compatible structure).
+	if strings.TrimSpace(activeXML) == "" && strings.TrimSpace(availableXML) != "" {
+		return availableXML, nil
 	}
-	return string(b), nil
+	if strings.TrimSpace(availableXML) == "" && strings.TrimSpace(activeXML) != "" {
+		return activeXML, nil
+	}
+
+	// Otherwise wrap both sections into one well-formed document.
+	return wrapSkillsPromptXML(availableXML, activeXML), nil
 }
 
 func normalizeSkillsPromptFilter(f *SkillFilter) SkillFilter {
@@ -265,6 +240,36 @@ func normalizeSkillsPromptFilter(f *SkillFilter) SkillFilter {
 		SessionID:      spec.SessionID(strings.TrimSpace(string(f.SessionID))),
 		Activity:       act,
 	}
+}
+
+func wrapSkillsPromptXML(parts ...string) string {
+	var b strings.Builder
+	b.WriteString("<skillsPrompt>")
+	wrote := false
+	for _, p := range parts {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		wrote = true
+		b.WriteByte('\n')
+		b.WriteString(indentLines(p, "  "))
+	}
+	if wrote {
+		b.WriteByte('\n')
+	}
+	b.WriteString("</skillsPrompt>")
+	return b.String()
+}
+
+func indentLines(s, prefix string) string {
+	if s == "" {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = prefix + lines[i]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func toCatalogFilter(f *SkillFilter) catalog.Filter {

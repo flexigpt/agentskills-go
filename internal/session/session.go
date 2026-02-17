@@ -2,14 +2,12 @@ package session
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 
-	"github.com/flexigpt/agentskills-go/internal/catalog"
 	"github.com/flexigpt/agentskills-go/spec"
 )
 
@@ -61,58 +59,9 @@ func newSession(cfg SessionConfig) *Session {
 
 func (s *Session) ID() string { return s.id }
 
-func (s *Session) ActiveSkillsPromptXML(ctx context.Context) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-
-	s.touchSession()
-	if s.isClosed() {
-		return "", spec.ErrSessionNotFound
-	}
-
-	s.mu.Lock()
-	order := append([]spec.SkillKey(nil), s.activeOrder...)
-	s.mu.Unlock()
-
-	items := make([]catalog.ActiveSkillItem, 0, len(order))
-	missing := make([]spec.SkillKey, 0)
-
-	for _, k := range order {
-
-		h, ok := s.catalog.HandleForKey(k)
-		if !ok {
-			// Skill removed from catalog: auto-prune from session.
-			missing = append(missing, k)
-			continue
-		}
-		body, err := s.catalog.EnsureBody(ctx, k)
-		if err != nil {
-			// If the skill disappeared concurrently, auto-prune; otherwise fail.
-			if errors.Is(err, spec.ErrSkillNotFound) {
-				missing = append(missing, k)
-				continue
-			}
-			return "", err
-		}
-		items = append(items, catalog.ActiveSkillItem{
-			Name: h.Name,
-			Body: body,
-		})
-	}
-
-	// Apply pruning in one locked mutation to reduce contention.
-	if len(missing) > 0 {
-		s.pruneKeys(missing)
-	}
-
-	return catalog.ActiveSkillsXML(items)
-}
-
 // ActiveKeys returns the session's active skill keys in activation order.
 //
-// It also prunes keys that no longer exist in the catalog (mirroring the behavior of
-// ActiveSkillsPromptXML), so callers don't need to handle removed-skills drift.
+// It also prunes keys that no longer exist in the catalog so callers don't need to handle removed-skills drift.
 func (s *Session) ActiveKeys(ctx context.Context) ([]spec.SkillKey, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
