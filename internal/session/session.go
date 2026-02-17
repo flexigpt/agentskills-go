@@ -213,6 +213,13 @@ func (s *Session) ActivateKeys(
 			}
 		}
 
+		// Re-check existence just before commit (skills could have been removed concurrently).
+		for _, k := range nextOrder {
+			if _, ok := s.catalog.Get(k); !ok {
+				return nil, spec.ErrSkillNotFound
+			}
+		}
+
 		// Commit.
 		s.mu.Lock()
 		if s.isClosed() {
@@ -239,12 +246,28 @@ func (s *Session) ActivateKeys(
 
 func (s *Session) activeHandlesLocked() ([]spec.SkillHandle, error) {
 	out := make([]spec.SkillHandle, 0, len(s.activeOrder))
+	var missing map[spec.SkillKey]struct{}
+
 	for _, k := range s.activeOrder {
 		h, ok := s.catalog.HandleForKey(k)
 		if !ok {
-			return nil, spec.ErrSkillNotFound
+			if missing == nil {
+				missing = map[spec.SkillKey]struct{}{}
+			}
+			missing[k] = struct{}{}
+			continue
 		}
 		out = append(out, h)
+	}
+	if len(missing) > 0 {
+		for k := range missing {
+			delete(s.activeSet, k)
+		}
+		s.activeOrder = slices.DeleteFunc(s.activeOrder, func(v spec.SkillKey) bool {
+			_, ok := missing[v]
+			return ok
+		})
+		s.stateVersion++
 	}
 	return out, nil
 }

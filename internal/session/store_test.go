@@ -1,6 +1,8 @@
 package session
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -19,7 +21,7 @@ func TestStore_TTLEviction(t *testing.T) {
 		Providers:           mapResolver{},
 	})
 
-	id, err := st.NewSession()
+	id, _, err := st.NewSession(t.Context(), NewSessionParams{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -47,11 +49,11 @@ func TestStore_MaxSessionsAndLRU(t *testing.T) {
 		Providers:           mapResolver{},
 	})
 
-	s1, err := st.NewSession()
+	s1, _, err := st.NewSession(t.Context(), NewSessionParams{})
 	if err != nil {
 		t.Fatalf("NewSession s1: %v", err)
 	}
-	s2, err := st.NewSession()
+	s2, _, err := st.NewSession(t.Context(), NewSessionParams{})
 	if err != nil {
 		t.Fatalf("NewSession s2: %v", err)
 	}
@@ -61,7 +63,7 @@ func TestStore_MaxSessionsAndLRU(t *testing.T) {
 		t.Fatalf("expected s1 to exist")
 	}
 
-	s3, err := st.NewSession()
+	s3, _, err := st.NewSession(t.Context(), NewSessionParams{})
 	if err != nil {
 		t.Fatalf("NewSession s3: %v", err)
 	}
@@ -92,7 +94,7 @@ func TestStore_PruneSkill(t *testing.T) {
 		Providers:           mapResolver{"t": &canonProvider{typ: "t"}},
 	})
 
-	id, err := st.NewSession()
+	id, _, err := st.NewSession(t.Context(), NewSessionParams{})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -112,5 +114,113 @@ func TestStore_PruneSkill(t *testing.T) {
 	defer s.mu.Unlock()
 	if len(s.activeOrder) != 0 {
 		t.Fatalf("expected activeOrder pruned to empty, got %+v", s.activeOrder)
+	}
+}
+
+func TestStore_NewSession_InitialActiveKeys_Activated(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	t.Cleanup(cancel)
+
+	cat := newMemCatalog()
+	k := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "p1"}}
+	cat.add(k, "ok")
+
+	st := NewStore(StoreConfig{
+		TTL:                 10 * time.Second,
+		MaxSessions:         100,
+		MaxActivePerSession: 8,
+		Catalog:             cat,
+		Providers:           mapResolver{"t": &canonProvider{typ: "t"}},
+	})
+
+	id, active, err := st.NewSession(ctx, NewSessionParams{ActiveKeys: []spec.SkillKey{k}})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if len(active) != 1 || active[0].Name != "a" {
+		t.Fatalf("expected one active handle a, got %+v", active)
+	}
+
+	s, ok := st.Get(id)
+	if !ok {
+		t.Fatalf("expected session exists")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.activeOrder) != 1 || s.activeOrder[0] != k {
+		t.Fatalf("expected activeOrder to contain key, got %+v", s.activeOrder)
+	}
+}
+
+func TestStore_NewSession_InitialActiveKeys_ErrorDeletesSession(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	t.Cleanup(cancel)
+
+	// Empty catalog; activation should fail with ErrSkillNotFound.
+	cat := newMemCatalog()
+
+	st := NewStore(StoreConfig{
+		TTL:                 10 * time.Second,
+		MaxSessions:         100,
+		MaxActivePerSession: 8,
+		Catalog:             cat,
+		Providers:           mapResolver{"t": &canonProvider{typ: "t"}},
+	})
+
+	_, _, err := st.NewSession(ctx, NewSessionParams{
+		ActiveKeys: []spec.SkillKey{{
+			Type:        "t",
+			SkillHandle: spec.SkillHandle{Name: "missing", Location: "p1"},
+		}},
+	})
+	if !errors.Is(err, spec.ErrSkillNotFound) {
+		t.Fatalf("expected ErrSkillNotFound, got %v", err)
+	}
+
+	// Store should not retain a session after activation failure.
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.m) != 0 || st.lru.Len() != 0 {
+		t.Fatalf("expected store empty after failed NewSession, got m=%d lru=%d", len(st.m), st.lru.Len())
+	}
+}
+
+func TestStore_NewSession_MaxActiveOverride_AppliesPerSession(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	t.Cleanup(cancel)
+
+	cat := newMemCatalog()
+	k1 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "p1"}}
+	k2 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "b", Location: "p2"}}
+	cat.add(k1, "ok")
+	cat.add(k2, "ok")
+
+	st := NewStore(StoreConfig{
+		TTL:                 10 * time.Second,
+		MaxSessions:         100,
+		MaxActivePerSession: 1, // default would reject 2 active keys
+		Catalog:             cat,
+		Providers:           mapResolver{"t": &canonProvider{typ: "t"}},
+	})
+
+	id, active, err := st.NewSession(ctx, NewSessionParams{
+		MaxActivePerSession: 2,
+		ActiveKeys:          []spec.SkillKey{k1, k2},
+	})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if len(active) != 2 {
+		t.Fatalf("expected 2 active handles, got %+v", active)
+	}
+	if _, ok := st.Get(id); !ok {
+		t.Fatalf("expected session exists")
 	}
 }

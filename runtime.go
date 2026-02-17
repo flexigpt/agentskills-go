@@ -180,16 +180,28 @@ func (r *Runtime) ProviderTypes() []string {
 
 // AddSkill indexes and registers a skill into the runtime-owned catalog.
 func (r *Runtime) AddSkill(ctx context.Context, key spec.SkillKey) (spec.SkillRecord, error) {
+	if ctx == nil {
+		return spec.SkillRecord{}, fmt.Errorf("%w: nil context", spec.ErrInvalidArgument)
+	}
 	if err := ctx.Err(); err != nil {
 		return spec.SkillRecord{}, err
+	}
+	if r == nil {
+		return spec.SkillRecord{}, fmt.Errorf("%w: nil runtime receiver", spec.ErrInvalidArgument)
 	}
 	return r.catalog.Add(ctx, key)
 }
 
 // RemoveSkill removes a skill from the catalog (and prunes it from all sessions).
 func (r *Runtime) RemoveSkill(ctx context.Context, key spec.SkillKey) (spec.SkillRecord, error) {
+	if ctx == nil {
+		return spec.SkillRecord{}, fmt.Errorf("%w: nil context", spec.ErrInvalidArgument)
+	}
 	if err := ctx.Err(); err != nil {
 		return spec.SkillRecord{}, err
+	}
+	if r == nil {
+		return spec.SkillRecord{}, fmt.Errorf("%w: nil runtime receiver", spec.ErrInvalidArgument)
 	}
 	rec, ok := r.catalog.Remove(key)
 	if !ok {
@@ -200,6 +212,9 @@ func (r *Runtime) RemoveSkill(ctx context.Context, key spec.SkillKey) (spec.Skil
 }
 
 func (r *Runtime) ListSkills(ctx context.Context, filter *SkillFilter) ([]spec.SkillRecord, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("%w: nil context", spec.ErrInvalidArgument)
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -265,20 +280,80 @@ func (r *Runtime) ListSkills(ctx context.Context, filter *SkillFilter) ([]spec.S
 	return out, nil
 }
 
-func (r *Runtime) NewSession(ctx context.Context) (spec.SessionID, error) {
+type newSessionOptions struct {
+	// If >0 overrides runtime/store default.
+	maxActivePerSession int
+
+	// Optional initial active set.
+	activeKeys []spec.SkillKey
+}
+
+// SessionOption configures Runtime.NewSession.
+type SessionOption func(*newSessionOptions) error
+
+// WithSessionMaxActivePerSession overrides the max active skills for this session only.
+// If n <= 0, it is ignored (defaults apply).
+func WithSessionMaxActivePerSession(n int) SessionOption {
+	return func(o *newSessionOptions) error {
+		o.maxActivePerSession = n
+		return nil
+	}
+}
+
+// WithSessionActiveKeys sets the initial active skill keys for the new session.
+// These are activated during session creation (no post-creation host activation API).
+func WithSessionActiveKeys(keys []spec.SkillKey) SessionOption {
+	snap := append([]spec.SkillKey(nil), keys...)
+	return func(o *newSessionOptions) error {
+		o.activeKeys = snap
+		return nil
+	}
+}
+
+// NewSession creates a new session. Session configuration (including an initial active set)
+// must be provided via SessionOption(s).
+func (r *Runtime) NewSession(ctx context.Context, opts ...SessionOption) (spec.SessionID, []spec.SkillHandle, error) {
+	if ctx == nil {
+		return "", nil, fmt.Errorf("%w: nil context", spec.ErrInvalidArgument)
+	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", nil, err
 	}
-	id, err := r.sessions.NewSession()
+
+	if r == nil {
+		return "", nil, fmt.Errorf("%w: nil runtime receiver", spec.ErrInvalidArgument)
+	}
+
+	cfg := newSessionOptions{}
+	for _, o := range opts {
+		if o == nil {
+			continue
+		}
+		if err := o(&cfg); err != nil {
+			return "", nil, err
+		}
+	}
+
+	id, active, err := r.sessions.NewSession(ctx, session.NewSessionParams{
+		MaxActivePerSession: cfg.maxActivePerSession,
+		ActiveKeys:          cfg.activeKeys,
+	})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return spec.SessionID(id), nil
+
+	return spec.SessionID(id), active, nil
 }
 
 func (r *Runtime) CloseSession(ctx context.Context, sid spec.SessionID) error {
+	if ctx == nil {
+		return fmt.Errorf("%w: nil context", spec.ErrInvalidArgument)
+	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if r == nil {
+		return fmt.Errorf("%w: nil runtime receiver", spec.ErrInvalidArgument)
 	}
 	if sid == "" {
 		return nil
@@ -287,30 +362,19 @@ func (r *Runtime) CloseSession(ctx context.Context, sid spec.SessionID) error {
 	return nil
 }
 
-// SessionActivateKeys is a host API to activate skills by internal keys (bypasses LLM handle resolution).
-func (r *Runtime) SessionActivateKeys(
-	ctx context.Context,
-	sid spec.SessionID,
-	keys []spec.SkillKey,
-	mode spec.LoadMode,
-) ([]spec.SkillHandle, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	s, ok := r.sessions.Get(string(sid))
-	if !ok {
-		return nil, spec.ErrSessionNotFound
-	}
-	return s.ActivateKeys(ctx, keys, mode)
-}
-
 func (r *Runtime) NewSessionRegistry(
 	ctx context.Context,
 	sid spec.SessionID,
 	opts ...llmtools.RegistryOption,
 ) (*llmtools.Registry, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("%w: nil context", spec.ErrInvalidArgument)
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if r == nil {
+		return nil, fmt.Errorf("%w: nil runtime receiver", spec.ErrInvalidArgument)
 	}
 	s, ok := r.sessions.Get(string(sid))
 	if !ok {

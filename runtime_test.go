@@ -86,13 +86,21 @@ func mustAddSkill(t *testing.T, rt *Runtime, ctx context.Context, key spec.Skill
 	return rec
 }
 
-func mustNewSession(t *testing.T, rt *Runtime, ctx context.Context) spec.SessionID {
+func mustNewSession(
+	t *testing.T,
+	rt *Runtime,
+	ctx context.Context,
+	opts ...SessionOption,
+) (spec.SessionID, []spec.SkillHandle) {
 	t.Helper()
-	sid, err := rt.NewSession(ctx)
+	sid, active, err := rt.NewSession(ctx, opts...)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	return sid
+	if sid == "" {
+		t.Fatalf("NewSession: got empty session id")
+	}
+	return sid, active
 }
 
 func xmlRootName(t *testing.T, s string) string {
@@ -300,14 +308,49 @@ func TestRuntime_ProviderTypesSorted(t *testing.T) {
 	}
 }
 
+func TestRuntime_NilContext_ReturnsInvalidArgument(t *testing.T) {
+	t.Parallel()
+
+	rt := mustNewRuntime(t, WithProvider(&fakeProvider{typ: "p"}))
+
+	var nilCtx context.Context
+
+	_, err := rt.AddSkill(nilCtx, spec.SkillKey{Type: "p", SkillHandle: spec.SkillHandle{Name: "a", Location: "/a"}})
+	if !errors.Is(err, spec.ErrInvalidArgument) {
+		t.Fatalf("AddSkill(nil ctx): expected ErrInvalidArgument, got %v", err)
+	}
+
+	_, _, err = rt.NewSession(nilCtx)
+	if !errors.Is(err, spec.ErrInvalidArgument) {
+		t.Fatalf("NewSession(nil ctx): expected ErrInvalidArgument, got %v", err)
+	}
+
+	err = rt.CloseSession(nilCtx, "sid")
+	if !errors.Is(err, spec.ErrInvalidArgument) {
+		t.Fatalf("CloseSession(nil ctx): expected ErrInvalidArgument, got %v", err)
+	}
+
+	_, err = rt.SkillsPromptXML(nilCtx, nil)
+	if !errors.Is(err, spec.ErrInvalidArgument) {
+		t.Fatalf("SkillsPromptXML(nil ctx): expected ErrInvalidArgument, got %v", err)
+	}
+
+	_, err = rt.ListSkills(nilCtx, nil)
+	if !errors.Is(err, spec.ErrInvalidArgument) {
+		t.Fatalf("ListSkills(nil ctx): expected ErrInvalidArgument, got %v", err)
+	}
+
+	_, err = rt.NewSessionRegistry(nilCtx, "sid")
+	if !errors.Is(err, spec.ErrInvalidArgument) {
+		t.Fatalf("NewSessionRegistry(nil ctx): expected ErrInvalidArgument, got %v", err)
+	}
+}
+
 func TestRuntime_AddSkill_RemoveSkill_Errors(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	t.Cleanup(cancel)
-
-	p := &fakeProvider{typ: "p"}
-	rt := mustNewRuntime(t, WithProvider(p))
 
 	tests := []struct {
 		name    string
@@ -317,6 +360,7 @@ func TestRuntime_AddSkill_RemoveSkill_Errors(t *testing.T) {
 		{
 			name: "AddSkill invalid argument (missing fields)",
 			do: func() error {
+				rt := mustNewRuntime(t, WithProvider(&fakeProvider{typ: "p"}))
 				_, err := rt.AddSkill(ctx, spec.SkillKey{})
 				return err
 			},
@@ -325,6 +369,7 @@ func TestRuntime_AddSkill_RemoveSkill_Errors(t *testing.T) {
 		{
 			name: "AddSkill provider not found",
 			do: func() error {
+				rt := mustNewRuntime(t, WithProvider(&fakeProvider{typ: "p"}))
 				_, err := rt.AddSkill(ctx, spec.SkillKey{
 					Type:        "missing",
 					SkillHandle: spec.SkillHandle{Name: "s", Location: "/x"},
@@ -336,6 +381,7 @@ func TestRuntime_AddSkill_RemoveSkill_Errors(t *testing.T) {
 		{
 			name: "RemoveSkill missing",
 			do: func() error {
+				rt := mustNewRuntime(t, WithProvider(&fakeProvider{typ: "p"}))
 				_, err := rt.RemoveSkill(ctx, spec.SkillKey{
 					Type:        "p",
 					SkillHandle: spec.SkillHandle{Name: "nope", Location: "/nope"},
@@ -347,6 +393,7 @@ func TestRuntime_AddSkill_RemoveSkill_Errors(t *testing.T) {
 		{
 			name: "AddSkill duplicate",
 			do: func() error {
+				rt := mustNewRuntime(t, WithProvider(&fakeProvider{typ: "p"}))
 				k := spec.SkillKey{Type: "p", SkillHandle: spec.SkillHandle{Name: "dup", Location: "/d"}}
 				if _, err := rt.AddSkill(ctx, k); err != nil {
 					return err
@@ -369,7 +416,7 @@ func TestRuntime_AddSkill_RemoveSkill_Errors(t *testing.T) {
 	}
 }
 
-func TestRuntime_SessionActivateKeys_CanonicalizesKeyViaProviderIndex(t *testing.T) {
+func TestRuntime_NewSession_InitialActiveKeys_CanonicalizesKeyViaProviderIndex(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
@@ -400,25 +447,90 @@ func TestRuntime_SessionActivateKeys_CanonicalizesKeyViaProviderIndex(t *testing
 		t.Fatalf("expected normalized location, got %q", rec.Key.Location)
 	}
 
-	// Activate using the *unnormalized* key - should still work (session canonicalizes via provider.Index).
-	sid := mustNewSession(t, rt, ctx)
-	t.Cleanup(func() { _ = rt.CloseSession(t.Context(), sid) })
-
-	handles, err := rt.SessionActivateKeys(ctx, sid,
-		[]spec.SkillKey{{
+	// Create session with the *unnormalized* key; should still work.
+	sid, active := mustNewSession(t, rt, ctx,
+		WithSessionActiveKeys([]spec.SkillKey{{
 			Type:        "p",
 			SkillHandle: spec.SkillHandle{Name: "s1", Location: "/p1"}, // unnormalized
-		}},
-		spec.LoadModeReplace,
+		}}),
 	)
-	if err != nil {
-		t.Fatalf("SessionActivateKeys: %v", err)
+	t.Cleanup(func() { _ = rt.CloseSession(t.Context(), sid) })
+
+	if len(active) != 1 {
+		t.Fatalf("expected 1 active handle, got %d", len(active))
 	}
-	if len(handles) != 1 {
-		t.Fatalf("expected 1 handle, got %d", len(handles))
+	if active[0].Location != rec.Key.Location {
+		t.Fatalf("expected activated handle location %q, got %q", rec.Key.Location, active[0].Location)
 	}
-	if handles[0].Location != rec.Key.Location {
-		t.Fatalf("expected activated handle location %q, got %q", rec.Key.Location, handles[0].Location)
+	if got := p.loadBodyCalls.Load(); got != 1 {
+		t.Fatalf("expected LoadBody called once, got %d", got)
+	}
+}
+
+func TestRuntime_NewSession_InitialActiveKeys_DedupePreservesFirstOrder(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	t.Cleanup(cancel)
+
+	p := &fakeProvider{typ: "p"}
+	rt := mustNewRuntime(t, WithProvider(p))
+
+	rA := mustAddSkill(t, rt, ctx, spec.SkillKey{Type: "p", SkillHandle: spec.SkillHandle{Name: "a", Location: "/a"}})
+	rB := mustAddSkill(t, rt, ctx, spec.SkillKey{Type: "p", SkillHandle: spec.SkillHandle{Name: "b", Location: "/b"}})
+
+	sid, active := mustNewSession(t, rt, ctx,
+		WithSessionActiveKeys([]spec.SkillKey{rA.Key, rA.Key, rB.Key, rB.Key}),
+	)
+	t.Cleanup(func() { _ = rt.CloseSession(t.Context(), sid) })
+
+	if len(active) != 2 {
+		t.Fatalf("expected 2 active handles, got %d: %+v", len(active), active)
+	}
+	if active[0].Name != "a" || active[1].Name != "b" {
+		t.Fatalf("expected order [a b], got [%s %s]", active[0].Name, active[1].Name)
+	}
+}
+
+func TestRuntime_NewSession_MaxActiveOverride_AppliesToInitialActiveKeys(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	t.Cleanup(cancel)
+
+	p := &fakeProvider{typ: "p"}
+	rt := mustNewRuntime(t, WithProvider(p))
+
+	rA := mustAddSkill(t, rt, ctx, spec.SkillKey{Type: "p", SkillHandle: spec.SkillHandle{Name: "a", Location: "/a"}})
+	rB := mustAddSkill(t, rt, ctx, spec.SkillKey{Type: "p", SkillHandle: spec.SkillHandle{Name: "b", Location: "/b"}})
+
+	_, _, err := rt.NewSession(ctx,
+		WithSessionMaxActivePerSession(1),
+		WithSessionActiveKeys([]spec.SkillKey{rA.Key, rB.Key}),
+	)
+	if !errors.Is(err, spec.ErrInvalidArgument) {
+		t.Fatalf("expected ErrInvalidArgument, got %v", err)
+	}
+}
+
+func TestRuntime_NewSession_UnknownActiveKey_ReturnsSkillNotFound(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	t.Cleanup(cancel)
+
+	p := &fakeProvider{typ: "p"}
+	rt := mustNewRuntime(t, WithProvider(p))
+
+	// Provider exists, but skill is not in catalog.
+	_, _, err := rt.NewSession(ctx,
+		WithSessionActiveKeys([]spec.SkillKey{{
+			Type:        "p",
+			SkillHandle: spec.SkillHandle{Name: "missing", Location: "/missing"},
+		}}),
+	)
+	if !errors.Is(err, spec.ErrSkillNotFound) {
+		t.Fatalf("expected ErrSkillNotFound, got %v", err)
 	}
 }
 
@@ -435,13 +547,8 @@ func TestRuntime_ListSkills_ActivityAndSessionFilters(t *testing.T) {
 	rB := mustAddSkill(t, rt, ctx, spec.SkillKey{Type: "p", SkillHandle: spec.SkillHandle{Name: "b", Location: "/b"}})
 	rC := mustAddSkill(t, rt, ctx, spec.SkillKey{Type: "p", SkillHandle: spec.SkillHandle{Name: "c", Location: "/c"}})
 
-	sid := mustNewSession(t, rt, ctx)
+	sid, _ := mustNewSession(t, rt, ctx, WithSessionActiveKeys([]spec.SkillKey{rA.Key, rB.Key}))
 	t.Cleanup(func() { _ = rt.CloseSession(t.Context(), sid) })
-
-	// Activate A and B.
-	if _, err := rt.SessionActivateKeys(ctx, sid, []spec.SkillKey{rA.Key, rB.Key}, spec.LoadModeReplace); err != nil {
-		t.Fatalf("SessionActivateKeys: %v", err)
-	}
 
 	tests := []struct {
 		name      string
@@ -590,12 +697,15 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 		t.Fatalf("expected available sorted by name a,b,c; got %v\nxml=%s", gotNames, xml1)
 	}
 
-	// Create session and activate A then B (activation order should be preserved in active section).
-	sid := mustNewSession(t, rt, ctx)
+	// Create session with initial active keys A then B (activation order should be preserved).
+	sid, active := mustNewSession(t, rt, ctx, WithSessionActiveKeys([]spec.SkillKey{rA.Key, rB.Key}))
 	t.Cleanup(func() { _ = rt.CloseSession(t.Context(), sid) })
 
-	if _, err := rt.SessionActivateKeys(ctx, sid, []spec.SkillKey{rA.Key, rB.Key}, spec.LoadModeReplace); err != nil {
-		t.Fatalf("SessionActivateKeys: %v", err)
+	if len(active) != 2 || active[0].Name != "a" || active[1].Name != "b" {
+		t.Fatalf("expected NewSession active order [a b], got %+v", active)
+	}
+	if got := p.loadBodyCalls.Load(); got != 2 {
+		t.Fatalf("expected LoadBody called twice (A,B) during initial activation, got %d", got)
 	}
 
 	// ActivityAny + session => skillsPrompt wrapper with both sections.
@@ -609,8 +719,14 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 	if !strings.Contains(xml2, "<![CDATA[") {
 		t.Fatalf("expected CDATA in activeSkills output\nxml=%s", xml2)
 	}
+	// In CDATA, bodies should appear unescaped.
 	if !strings.Contains(xml2, "BODY<a>&") && !strings.Contains(xml2, "BODY<b>&") {
 		t.Fatalf("expected raw (unescaped) body in CDATA\nxml=%s", xml2)
+	}
+
+	// Prompt generation should *not* trigger additional LoadBody calls (cached by catalog).
+	if got := p.loadBodyCalls.Load(); got != 2 {
+		t.Fatalf("expected LoadBody call count to remain 2 after prompt generation, got %d", got)
 	}
 
 	doc := mustUnmarshalPrompt(t, xml2)
@@ -626,7 +742,7 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 		t.Fatalf("expected active order [a b], got [%s %s]\nxml=%s",
 			doc.Active.Skills[0].Name, doc.Active.Skills[1].Name, xml2)
 	}
-	if doc.Active.Skills[0].Body != "BODY<a>&" {
+	if strings.TrimSpace(doc.Active.Skills[0].Body) != "BODY<a>&" {
 		t.Fatalf("expected active body %q, got %q\nxml=%s", "BODY<a>&", doc.Active.Skills[0].Body, xml2)
 	}
 
@@ -710,6 +826,15 @@ func TestRuntime_SkillsPromptXML_Errors(t *testing.T) {
 			wantErr: spec.ErrInvalidArgument,
 		},
 		{
+			name: "nil context",
+			do: func() error {
+				var nilCtx context.Context
+				_, err := rt.SkillsPromptXML(nilCtx, nil)
+				return err
+			},
+			wantErr: spec.ErrInvalidArgument,
+		},
+		{
 			name: "context canceled",
 			do: func() error {
 				cctx, ccancel := context.WithCancel(ctx)
@@ -748,6 +873,7 @@ func TestRuntime_SkillsPromptXML_Errors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+
 			err := tt.do()
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("expected %v, got %v", tt.wantErr, err)

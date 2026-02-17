@@ -67,6 +67,9 @@ type SkillFilter struct {
 //   - If both sections are requested simultaneously, the output is wrapped in:
 //     <skillsPrompt> ... </skillsPrompt>
 func (r *Runtime) SkillsPromptXML(ctx context.Context, f *SkillFilter) (string, error) {
+	if ctx == nil {
+		return "", fmt.Errorf("%w: nil context", spec.ErrInvalidArgument)
+	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}

@@ -84,16 +84,12 @@ func TestRuntime_FSProvider_EndToEnd(t *testing.T) {
 	}
 
 	// Create session and activate skill (progressive disclosure).
-	sid, err := rt.NewSession(ctx)
+	sid, handles, err := rt.NewSession(ctx, agentskills.WithSessionActiveKeys([]spec.SkillKey{rec.Key}))
 	if err != nil {
 		t.Fatalf("new session: %v", err)
 	}
 	t.Cleanup(func() { _ = rt.CloseSession(t.Context(), sid) })
 
-	handles, err := rt.SessionActivateKeys(ctx, sid, []spec.SkillKey{rec.Key}, spec.LoadModeReplace)
-	if err != nil {
-		t.Fatalf("activate keys: %v", err)
-	}
 	if len(handles) != 1 {
 		t.Fatalf("expected 1 active handle, got %d", len(handles))
 	}

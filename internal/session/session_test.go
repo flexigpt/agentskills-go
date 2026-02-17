@@ -171,6 +171,7 @@ func TestSession_ActivateKeys_RetriesOnConcurrentModification(t *testing.T) {
 	}()
 
 	<-block // ensure ActivateKeys is between snapshot and commit (blocked in EnsureBody)
+
 	// Concurrent mutation: unload all.
 	_, uerr := s.toolUnload(t.Context(), spec.UnloadArgs{All: true})
 	if uerr != nil {
@@ -194,4 +195,172 @@ func TestSession_ActivateKeys_RetriesOnConcurrentModification(t *testing.T) {
 	if len(s.activeOrder) != 1 || s.activeOrder[0] != k2 {
 		t.Fatalf("unexpected final state: %+v", s.activeOrder)
 	}
+}
+
+func TestSession_ActiveKeys_PrunesMissingCatalogSkills(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	t.Cleanup(cancel)
+
+	cat := newToggleCatalog()
+	k := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "p1"}}
+	cat.put(k, "body")
+
+	s := newSession(SessionConfig{
+		ID:                  "id",
+		Catalog:             cat,
+		Providers:           mapResolver{"t": &canonProvider{typ: "t"}},
+		MaxActivePerSession: 8,
+		Touch:               func() {},
+	})
+
+	if _, err := s.ActivateKeys(ctx, []spec.SkillKey{k}, spec.LoadModeReplace); err != nil {
+		t.Fatalf("ActivateKeys: %v", err)
+	}
+
+	// Remove from catalog; ActiveKeys should prune session state and return empty.
+	cat.remove(k)
+
+	keys, err := s.ActiveKeys(ctx)
+	if err != nil {
+		t.Fatalf("ActiveKeys: %v", err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("expected 0 active keys after prune, got %v", keys)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.activeOrder) != 0 {
+		t.Fatalf("expected activeOrder pruned to empty, got %+v", s.activeOrder)
+	}
+}
+
+func TestSession_ActivateKeys_SkillRemovedDuringActivation_DoesNotCommit(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	t.Cleanup(cancel)
+
+	cat := newToggleCatalog()
+	k1 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "p1"}}
+	k2 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "b", Location: "p2"}}
+	cat.put(k1, "body-a")
+	cat.put(k2, "body-b")
+
+	block := make(chan struct{})
+	release := make(chan struct{})
+	cat.ensureFn = func(ctx context.Context, k spec.SkillKey) (string, error) {
+		if k == k2 {
+			close(block)
+			<-release
+		}
+		return cat.defaultEnsureBody(ctx, k)
+	}
+
+	s := newSession(SessionConfig{
+		ID:                  "id",
+		Catalog:             cat,
+		Providers:           mapResolver{"t": &canonProvider{typ: "t"}},
+		MaxActivePerSession: 8,
+		Touch:               func() {},
+	})
+
+	// Baseline active set.
+	if _, err := s.ActivateKeys(ctx, []spec.SkillKey{k1}, spec.LoadModeReplace); err != nil {
+		t.Fatalf("ActivateKeys(k1): %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.ActivateKeys(ctx, []spec.SkillKey{k2}, spec.LoadModeAdd)
+		done <- err
+	}()
+
+	<-block
+	// Simulate concurrent removal from catalog while activation is in-flight.
+	cat.remove(k2)
+	close(release)
+
+	err := <-done
+	if !errors.Is(err, spec.ErrSkillNotFound) {
+		t.Fatalf("expected ErrSkillNotFound, got %v", err)
+	}
+
+	// Ensure session state was not committed with missing key.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.activeOrder) != 1 || s.activeOrder[0] != k1 {
+		t.Fatalf("expected only k1 active after failed activation, got %+v", s.activeOrder)
+	}
+}
+
+type toggleCatalog struct {
+	mu       sync.Mutex
+	recs     map[spec.SkillKey]spec.SkillRecord
+	bodies   map[spec.SkillKey]string
+	ensureFn func(ctx context.Context, k spec.SkillKey) (string, error)
+}
+
+func newToggleCatalog() *toggleCatalog {
+	return &toggleCatalog{
+		recs:   map[spec.SkillKey]spec.SkillRecord{},
+		bodies: map[spec.SkillKey]string{},
+	}
+}
+
+func (c *toggleCatalog) ResolveHandle(h spec.SkillHandle) (spec.SkillKey, bool) {
+	// Not needed for these tests.
+	return spec.SkillKey{}, false
+}
+
+func (c *toggleCatalog) HandleForKey(key spec.SkillKey) (spec.SkillHandle, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.recs[key]; !ok {
+		return spec.SkillHandle{}, false
+	}
+	return spec.SkillHandle{Name: key.Name, Location: key.Location}, true
+}
+
+func (c *toggleCatalog) EnsureBody(ctx context.Context, key spec.SkillKey) (string, error) {
+	if c.ensureFn != nil {
+		return c.ensureFn(ctx, key)
+	}
+	return c.defaultEnsureBody(ctx, key)
+}
+
+func (c *toggleCatalog) Get(key spec.SkillKey) (spec.SkillRecord, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	rec, ok := c.recs[key]
+	return rec, ok
+}
+
+func (c *toggleCatalog) put(k spec.SkillKey, body string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.recs[k] = spec.SkillRecord{Key: k, Description: "d:" + k.Name}
+	c.bodies[k] = body
+}
+
+func (c *toggleCatalog) remove(k spec.SkillKey) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.recs, k)
+	delete(c.bodies, k)
+}
+
+func (c *toggleCatalog) defaultEnsureBody(ctx context.Context, key spec.SkillKey) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	b, ok := c.bodies[key]
+	if !ok {
+		return "", spec.ErrSkillNotFound
+	}
+	return b, nil
 }

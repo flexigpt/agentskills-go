@@ -2,6 +2,7 @@ package session
 
 import (
 	"container/list"
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -37,6 +38,14 @@ type item struct {
 	lastUsed time.Time
 }
 
+type NewSessionParams struct {
+	// If >0 overrides store default for this session.
+	MaxActivePerSession int
+
+	// Optional initial active skill keys (activated with LoadModeReplace).
+	ActiveKeys []spec.SkillKey
+}
+
 func NewStore(cfg StoreConfig) *Store {
 	ttl := cfg.TTL
 	if ttl <= 0 {
@@ -55,25 +64,36 @@ func NewStore(cfg StoreConfig) *Store {
 	}
 }
 
-func (st *Store) NewSession() (string, error) {
+func (st *Store) NewSession(ctx context.Context, p NewSessionParams) (string, []spec.SkillHandle, error) {
+	if ctx == nil {
+		return "", nil, fmt.Errorf("%w: nil context", spec.ErrInvalidArgument)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", nil, err
+	}
 	now := time.Now()
 
 	st.mu.Lock()
-	defer st.mu.Unlock()
 
 	st.evictExpiredLocked(now)
 	st.evictOverLimitLocked()
 
 	u, err := uuid.NewV7()
 	if err != nil {
-		return "", fmt.Errorf("new session id: %w", err)
+		st.mu.Unlock()
+		return "", nil, fmt.Errorf("new session id: %w", err)
 	}
 	id := u.String()
+	maxActive := st.cfg.MaxActivePerSession
+	if p.MaxActivePerSession > 0 {
+		maxActive = p.MaxActivePerSession
+	}
+
 	s := newSession(SessionConfig{
 		ID:                  id,
 		Catalog:             st.cfg.Catalog,
 		Providers:           st.cfg.Providers,
-		MaxActivePerSession: st.cfg.MaxActivePerSession,
+		MaxActivePerSession: maxActive,
 		Touch:               func() { st.touch(id) },
 	})
 
@@ -81,8 +101,18 @@ func (st *Store) NewSession() (string, error) {
 	st.m[id] = e
 
 	st.evictOverLimitLocked()
+	st.mu.Unlock()
 
-	return id, nil
+	if len(p.ActiveKeys) == 0 {
+		return id, nil, nil
+	}
+
+	handles, err := s.ActivateKeys(ctx, p.ActiveKeys, spec.LoadModeReplace)
+	if err != nil {
+		st.Delete(id)
+		return "", nil, err
+	}
+	return id, handles, nil
 }
 
 func (st *Store) Get(id string) (*Session, bool) {
