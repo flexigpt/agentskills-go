@@ -12,8 +12,6 @@ import (
 )
 
 func TestSession_ActivateKeys_ReplaceAdd_DedupeAndOrdering(t *testing.T) {
-	t.Parallel()
-
 	cat := newMemCatalog()
 	k1 := spec.ProviderSkillKey{Type: "t", Name: "a", Location: "p1"}
 	k2 := spec.ProviderSkillKey{Type: "t", Name: "b", Location: "p2"}
@@ -72,7 +70,6 @@ func TestSession_ActivateKeys_ReplaceAdd_DedupeAndOrdering(t *testing.T) {
 
 	for _, st := range steps {
 		t.Run(st.name, func(t *testing.T) {
-			t.Parallel()
 			hs, err := st.do(t.Context())
 			if err != nil {
 				t.Fatalf("ActivateKeys: %v", err)
@@ -90,8 +87,6 @@ func TestSession_ActivateKeys_ReplaceAdd_DedupeAndOrdering(t *testing.T) {
 }
 
 func TestSession_ActivateKeys_EnsureBodyErrorDoesNotCommit(t *testing.T) {
-	t.Parallel()
-
 	cat := newMemCatalog()
 	k1 := spec.ProviderSkillKey{Type: "t", Name: "a", Location: "p1"}
 	k2 := spec.ProviderSkillKey{Type: "t", Name: "b", Location: "p2"}
@@ -131,8 +126,6 @@ func TestSession_ActivateKeys_EnsureBodyErrorDoesNotCommit(t *testing.T) {
 }
 
 func TestSession_ActivateKeys_MaxActiveIsInvalidArgument(t *testing.T) {
-	t.Parallel()
-
 	cat := newMemCatalog()
 	k1 := spec.ProviderSkillKey{Type: "t", Name: "a", Location: "p1"}
 	k2 := spec.ProviderSkillKey{Type: "t", Name: "b", Location: "p2"}
@@ -157,8 +150,6 @@ func TestSession_ActivateKeys_MaxActiveIsInvalidArgument(t *testing.T) {
 }
 
 func TestSession_ActivateKeys_RetriesOnConcurrentModification(t *testing.T) {
-	t.Parallel()
-
 	cat := newMemCatalog()
 	k1 := spec.ProviderSkillKey{Type: "t", Name: "a", Location: "p1"}
 	k2 := spec.ProviderSkillKey{Type: "t", Name: "b", Location: "p2"}
@@ -226,8 +217,6 @@ func TestSession_ActivateKeys_RetriesOnConcurrentModification(t *testing.T) {
 }
 
 func TestSession_ActiveKeys_PrunesMissingCatalogSkills(t *testing.T) {
-	t.Parallel()
-
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	t.Cleanup(cancel)
 
@@ -266,8 +255,6 @@ func TestSession_ActiveKeys_PrunesMissingCatalogSkills(t *testing.T) {
 }
 
 func TestSession_ActivateKeys_SkillRemovedDuringActivation_DoesNotCommit(t *testing.T) {
-	t.Parallel()
-
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	t.Cleanup(cancel)
 
@@ -326,8 +313,6 @@ func TestSession_ActivateKeys_SkillRemovedDuringActivation_DoesNotCommit(t *test
 }
 
 func TestSession_ActivateKeys_ValidationErrors(t *testing.T) {
-	t.Parallel()
-
 	cat := newMemCatalog()
 	k1 := spec.ProviderSkillKey{Type: "t", Name: "a", Location: "p1"}
 	cat.add(k1, "ok")
@@ -402,7 +387,6 @@ func TestSession_ActivateKeys_ValidationErrors(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			if tc.closed {
 				s.closed.Store(true)
 				t.Cleanup(func() { s.closed.Store(false) })

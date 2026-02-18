@@ -1,260 +1,90 @@
-package agentskills
+package integration
 
 import (
 	"context"
-	"encoding/xml"
 	"errors"
 	"log/slog"
 	"sort"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	llmtoolsgoSpec "github.com/flexigpt/llmtools-go/spec"
+	"github.com/flexigpt/agentskills-go"
 
 	"github.com/flexigpt/agentskills-go/spec"
 )
-
-type fakeProvider struct {
-	typ string
-
-	indexCalls    atomic.Int32
-	loadBodyCalls atomic.Int32
-
-	indexFn    func(context.Context, spec.SkillDef) (spec.ProviderSkillIndexRecord, error)
-	loadBodyFn func(context.Context, spec.ProviderSkillKey) (string, error)
-}
-
-func (p *fakeProvider) Type() string { return p.typ }
-
-func (p *fakeProvider) Index(ctx context.Context, def spec.SkillDef) (spec.ProviderSkillIndexRecord, error) {
-	p.indexCalls.Add(1)
-	if p.indexFn != nil {
-		return p.indexFn(ctx, def)
-	}
-	return spec.ProviderSkillIndexRecord{
-		Key:         spec.ProviderSkillKey(def),
-		Description: "desc:" + def.Type + ":" + def.Name,
-	}, nil
-}
-
-func (p *fakeProvider) LoadBody(ctx context.Context, key spec.ProviderSkillKey) (string, error) {
-	p.loadBodyCalls.Add(1)
-	if p.loadBodyFn != nil {
-		return p.loadBodyFn(ctx, key)
-	}
-	// Include markup + '&' so we can detect CDATA vs escaping.
-	return "BODY<" + key.Name + ">&", nil
-}
-
-func (p *fakeProvider) ReadResource(
-	ctx context.Context,
-	key spec.ProviderSkillKey,
-	resourceLocation string,
-	encoding spec.ReadResourceEncoding,
-) ([]llmtoolsgoSpec.ToolOutputUnion, error) {
-	return nil, spec.ErrInvalidArgument
-}
-
-func (p *fakeProvider) RunScript(
-	ctx context.Context,
-	key spec.ProviderSkillKey,
-	scriptLocation string,
-	args []string,
-	env map[string]string,
-	workDir string,
-) (spec.RunScriptOut, error) {
-	return spec.RunScriptOut{}, spec.ErrRunScriptUnsupported
-}
-
-func mustNewRuntime(t *testing.T, opts ...Option) *Runtime {
-	t.Helper()
-	rt, err := New(opts...)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if rt == nil {
-		t.Fatalf("New: got nil runtime")
-	}
-	return rt
-}
-
-func mustAddSkill(t *testing.T, rt *Runtime, ctx context.Context, def spec.SkillDef) spec.SkillRecord {
-	t.Helper()
-	rec, err := rt.AddSkill(ctx, def)
-	if err != nil {
-		t.Fatalf("AddSkill(%+v): %v", def, err)
-	}
-	if rec.Def != def {
-		t.Fatalf("AddSkill: returned record.Def mismatch: got=%+v want=%+v", rec.Def, def)
-	}
-	return rec
-}
-
-func mustNewSession(
-	t *testing.T,
-	rt *Runtime,
-	ctx context.Context,
-	opts ...SessionOption,
-) (spec.SessionID, []spec.SkillDef) {
-	t.Helper()
-	sid, active, err := rt.NewSession(ctx, opts...)
-	if err != nil {
-		t.Fatalf("NewSession: %v", err)
-	}
-	if sid == "" {
-		t.Fatalf("NewSession: got empty session id")
-	}
-	return sid, active
-}
-
-func xmlRootName(t *testing.T, s string) string {
-	t.Helper()
-	dec := xml.NewDecoder(strings.NewReader(s))
-	for {
-		tok, err := dec.Token()
-		if err != nil {
-			t.Fatalf("xmlRootName token: %v\nxml=%s", err, s)
-		}
-		if se, ok := tok.(xml.StartElement); ok {
-			return se.Name.Local
-		}
-	}
-}
-
-type availableSkillsDoc struct {
-	XMLName xml.Name `xml:"availableSkills"`
-	Skills  []struct {
-		Name        string `xml:"name"`
-		Description string `xml:"description"`
-		Location    string `xml:"location"`
-	} `xml:"skill"`
-}
-
-type activeSkillsDoc struct {
-	XMLName xml.Name `xml:"activeSkills"`
-	Skills  []struct {
-		Name string `xml:"name,attr"`
-		Body string `xml:",chardata"`
-	} `xml:"skill"`
-}
-
-type skillsPromptDoc struct {
-	XMLName   xml.Name            `xml:"skillsPrompt"`
-	Available *availableSkillsDoc `xml:"availableSkills"`
-	Active    *activeSkillsDoc    `xml:"activeSkills"`
-}
-
-const availableSkillsRoot = "availableSkills"
-
-func mustUnmarshalAvailable(t *testing.T, s string) availableSkillsDoc {
-	t.Helper()
-	var doc availableSkillsDoc
-	if err := xml.Unmarshal([]byte(s), &doc); err != nil {
-		t.Fatalf("unmarshal availableSkills: %v\nxml=%s", err, s)
-	}
-	if doc.XMLName.Local != availableSkillsRoot {
-		t.Fatalf("expected root %s, got %q", availableSkillsRoot, doc.XMLName.Local)
-	}
-	return doc
-}
-
-func mustUnmarshalActive(t *testing.T, s string) activeSkillsDoc {
-	t.Helper()
-	var doc activeSkillsDoc
-	if err := xml.Unmarshal([]byte(s), &doc); err != nil {
-		t.Fatalf("unmarshal activeSkills: %v\nxml=%s", err, s)
-	}
-	if doc.XMLName.Local != "activeSkills" {
-		t.Fatalf("expected root activeSkills, got %q", doc.XMLName.Local)
-	}
-	return doc
-}
-
-func mustUnmarshalPrompt(t *testing.T, s string) skillsPromptDoc {
-	t.Helper()
-	var doc skillsPromptDoc
-	if err := xml.Unmarshal([]byte(s), &doc); err != nil {
-		t.Fatalf("unmarshal skillsPrompt: %v\nxml=%s", err, s)
-	}
-	if doc.XMLName.Local != "skillsPrompt" {
-		t.Fatalf("expected root skillsPrompt, got %q", doc.XMLName.Local)
-	}
-	return doc
-}
 
 func TestNew_RuntimeOptionsValidation(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name    string
-		opts    []Option
+		opts    []agentskills.Option
 		wantErr string
 	}{
 		{
-			name:    "nil provider in WithProvider",
-			opts:    []Option{WithProvider(nil)},
+			name:    "nil provider in agentskills.WithProvider",
+			opts:    []agentskills.Option{agentskills.WithProvider(nil)},
 			wantErr: "nil provider",
 		},
 		{
 			name:    "provider.Type empty",
-			opts:    []Option{WithProvider(&fakeProvider{typ: ""})},
+			opts:    []agentskills.Option{agentskills.WithProvider(&fakeProvider{typ: ""})},
 			wantErr: "provider.Type() returned empty string",
 		},
 		{
-			name: "duplicate provider type via WithProvider",
-			opts: []Option{
-				WithProvider(&fakeProvider{typ: "dup"}),
-				WithProvider(&fakeProvider{typ: "dup"}),
+			name: "duplicate provider type via agentskills.WithProvider",
+			opts: []agentskills.Option{
+				agentskills.WithProvider(&fakeProvider{typ: "dup"}),
+				agentskills.WithProvider(&fakeProvider{typ: "dup"}),
 			},
 			wantErr: "duplicate provider type",
 		},
 		{
-			name: "nil provider in WithProviders map",
-			opts: []Option{
-				WithProviders(map[string]spec.SkillProvider{"x": nil}),
+			name: "nil provider in agentskills.WithProvidersByType map",
+			opts: []agentskills.Option{
+				agentskills.WithProvidersByType(map[string]spec.SkillProvider{"x": nil}),
 			},
 			wantErr: "nil provider for type",
 		},
 		{
-			name: "empty type key in WithProviders map",
-			opts: []Option{
-				WithProviders(map[string]spec.SkillProvider{"": &fakeProvider{typ: "ok"}}),
+			name: "empty type key in agentskills.WithProvidersByType map",
+			opts: []agentskills.Option{
+				agentskills.WithProvidersByType(map[string]spec.SkillProvider{"": &fakeProvider{typ: "ok"}}),
 			},
 			wantErr: "empty provider type key",
 		},
 		{
 			name: "type mismatch key vs provider.Type",
-			opts: []Option{
-				WithProviders(map[string]spec.SkillProvider{"a": &fakeProvider{typ: "b"}}),
+			opts: []agentskills.Option{
+				agentskills.WithProvidersByType(map[string]spec.SkillProvider{"a": &fakeProvider{typ: "b"}}),
 			},
 			wantErr: "provider type mismatch",
 		},
 		{
-			name: "duplicate provider type across WithProvider and WithProviders",
-			opts: []Option{
-				WithProvider(&fakeProvider{typ: "x"}),
-				WithProviders(map[string]spec.SkillProvider{"x": &fakeProvider{typ: "x"}}),
+			name: "duplicate provider type across agentskills.WithProvider and agentskills.WithProvidersByType",
+			opts: []agentskills.Option{
+				agentskills.WithProvider(&fakeProvider{typ: "x"}),
+				agentskills.WithProvidersByType(map[string]spec.SkillProvider{"x": &fakeProvider{typ: "x"}}),
 			},
 			wantErr: "duplicate provider type",
 		},
 		{
 			name: "logger nil allowed and normalized",
-			opts: []Option{
-				WithLogger(nil),
-				WithProvider(&fakeProvider{typ: "ok"}),
+			opts: []agentskills.Option{
+				agentskills.WithLogger(nil),
+				agentskills.WithProvider(&fakeProvider{typ: "ok"}),
 			},
 			wantErr: "",
 		},
 		{
-			name: "WithProviders input is snapshotted (caller mutation after WithProviders does not affect runtime)",
-			opts: func() []Option {
+			name: "agentskills.WithProvidersByType input is snapshotted (caller mutation after agentskills.WithProvidersByType does not affect runtime)",
+			opts: func() []agentskills.Option {
 				pOK := &fakeProvider{typ: "ok"}
 				m := map[string]spec.SkillProvider{"ok": pOK}
-				o := WithProviders(m)
-				delete(m, "ok") // should not affect if WithProviders snapshots
-				return []Option{o}
+				o := agentskills.WithProvidersByType(m)
+				delete(m, "ok") // should not affect if agentskills.WithProvidersByType snapshots
+				return []agentskills.Option{o}
 			}(),
 			wantErr: "",
 		},
@@ -264,7 +94,7 @@ func TestNew_RuntimeOptionsValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			rt, err := New(tt.opts...)
+			rt, err := agentskills.New(tt.opts...)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("expected error containing %q, got runtime=%v err=%v", tt.wantErr, rt, err)
@@ -298,9 +128,9 @@ func TestRuntime_ProviderTypesSorted(t *testing.T) {
 	t.Parallel()
 
 	rt := mustNewRuntime(t,
-		WithProvider(&fakeProvider{typ: "z"}),
-		WithProvider(&fakeProvider{typ: "a"}),
-		WithProvider(&fakeProvider{typ: "m"}),
+		agentskills.WithProvider(&fakeProvider{typ: "z"}),
+		agentskills.WithProvider(&fakeProvider{typ: "a"}),
+		agentskills.WithProvider(&fakeProvider{typ: "m"}),
 	)
 
 	got := rt.ProviderTypes()
@@ -315,7 +145,7 @@ func TestRuntime_ProviderTypesSorted(t *testing.T) {
 func TestRuntime_NilContext_ReturnsInvalidArgument(t *testing.T) {
 	t.Parallel()
 
-	rt := mustNewRuntime(t, WithProvider(&fakeProvider{typ: "p"}))
+	rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "p"}))
 	var nilCtx context.Context
 
 	_, err := rt.AddSkill(nilCtx, spec.SkillDef{Type: "p", Name: "a", Location: "/a"})
@@ -382,7 +212,7 @@ func TestRuntime_AddSkill_RemoveSkill_Errors(t *testing.T) {
 		{
 			name: "AddSkill invalid argument (missing fields)",
 			do: func() error {
-				rt := mustNewRuntime(t, WithProvider(&fakeProvider{typ: "p"}))
+				rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "p"}))
 				_, err := rt.AddSkill(ctx, spec.SkillDef{})
 				return err
 			},
@@ -391,7 +221,7 @@ func TestRuntime_AddSkill_RemoveSkill_Errors(t *testing.T) {
 		{
 			name: "AddSkill invalid argument (leading/trailing whitespace is rejected)",
 			do: func() error {
-				rt := mustNewRuntime(t, WithProvider(&fakeProvider{typ: "p"}))
+				rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "p"}))
 				_, err := rt.AddSkill(ctx, spec.SkillDef{Type: " p", Name: "a", Location: "/a"})
 				return err
 			},
@@ -400,7 +230,7 @@ func TestRuntime_AddSkill_RemoveSkill_Errors(t *testing.T) {
 		{
 			name: "AddSkill provider not found",
 			do: func() error {
-				rt := mustNewRuntime(t, WithProvider(&fakeProvider{typ: "p"}))
+				rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "p"}))
 				_, err := rt.AddSkill(ctx, spec.SkillDef{
 					Type:     "missing",
 					Name:     "s",
@@ -413,7 +243,7 @@ func TestRuntime_AddSkill_RemoveSkill_Errors(t *testing.T) {
 		{
 			name: "RemoveSkill missing",
 			do: func() error {
-				rt := mustNewRuntime(t, WithProvider(&fakeProvider{typ: "p"}))
+				rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "p"}))
 				_, err := rt.RemoveSkill(ctx, spec.SkillDef{
 					Type:     "p",
 					Name:     "nope",
@@ -426,7 +256,7 @@ func TestRuntime_AddSkill_RemoveSkill_Errors(t *testing.T) {
 		{
 			name: "AddSkill duplicate",
 			do: func() error {
-				rt := mustNewRuntime(t, WithProvider(&fakeProvider{typ: "p"}))
+				rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "p"}))
 				def := spec.SkillDef{Type: "p", Name: "dup", Location: "/d"}
 				if _, err := rt.AddSkill(ctx, def); err != nil {
 					return err
@@ -439,7 +269,7 @@ func TestRuntime_AddSkill_RemoveSkill_Errors(t *testing.T) {
 		{
 			name: "RemoveSkill does not match provider-canonicalized location (must match exact user-provided def)",
 			do: func() error {
-				rt := mustNewRuntime(t, WithProvider(pCanon))
+				rt := mustNewRuntime(t, agentskills.WithProvider(pCanon))
 				orig := spec.SkillDef{Type: "p", Name: "s1", Location: "/p1"}
 				if _, err := rt.AddSkill(ctx, orig); err != nil {
 					return err
@@ -452,7 +282,7 @@ func TestRuntime_AddSkill_RemoveSkill_Errors(t *testing.T) {
 		{
 			name: "nil runtime receiver returns invalid argument",
 			do: func() error {
-				var nilRT *Runtime
+				var nilRT *agentskills.Runtime
 				_, err := nilRT.AddSkill(ctx, spec.SkillDef{Type: "p", Name: "x", Location: "/x"})
 				return err
 			},
@@ -473,32 +303,28 @@ func TestRuntime_AddSkill_RemoveSkill_Errors(t *testing.T) {
 }
 
 func TestRuntime_NewSession_InitialActiveSkills_ReturnsExactlyProvidedDefs(t *testing.T) {
-	t.Parallel()
-
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	t.Cleanup(cancel)
 
-	rt := mustNewRuntime(t, WithProvider(&fakeProvider{typ: "p"}))
+	rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "p"}))
 	def := spec.SkillDef{Type: "p", Name: "s1", Location: "/p1"}
 	_ = mustAddSkill(t, rt, ctx, def)
 
-	_, active := mustNewSession(t, rt, ctx, WithSessionActiveSkills([]spec.SkillDef{def}))
+	_, active := mustNewSession(t, rt, ctx, agentskills.WithSessionActiveSkills([]spec.SkillDef{def}))
 	if len(active) != 1 || active[0] != def {
 		t.Fatalf("expected active defs [%+v], got %+v", def, active)
 	}
 }
 
 func TestRuntime_NewSession_InitialActiveSkills_DuplicateDefErrors(t *testing.T) {
-	t.Parallel()
-
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	t.Cleanup(cancel)
 
-	rt := mustNewRuntime(t, WithProvider(&fakeProvider{typ: "p"}))
+	rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "p"}))
 	def := spec.SkillDef{Type: "p", Name: "s1", Location: "/p1"}
 	_ = mustAddSkill(t, rt, ctx, def)
 
-	_, _, err := rt.NewSession(ctx, WithSessionActiveSkills([]spec.SkillDef{def, def}))
+	_, _, err := rt.NewSession(ctx, agentskills.WithSessionActiveSkills([]spec.SkillDef{def, def}))
 	if !errors.Is(err, spec.ErrInvalidArgument) {
 		t.Fatalf("expected ErrInvalidArgument, got %v", err)
 	}
@@ -510,15 +336,15 @@ func TestRuntime_NewSession_MaxActiveOverride_AppliesToInitialActiveSkills(t *te
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	t.Cleanup(cancel)
 
-	rt := mustNewRuntime(t, WithProvider(&fakeProvider{typ: "p"}))
+	rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "p"}))
 	defA := spec.SkillDef{Type: "p", Name: "a", Location: "/a"}
 	defB := spec.SkillDef{Type: "p", Name: "b", Location: "/b"}
 	_ = mustAddSkill(t, rt, ctx, defA)
 	_ = mustAddSkill(t, rt, ctx, defB)
 
 	_, _, err := rt.NewSession(ctx,
-		WithSessionMaxActivePerSession(1),
-		WithSessionActiveSkills([]spec.SkillDef{defA, defB}),
+		agentskills.WithSessionMaxActivePerSession(1),
+		agentskills.WithSessionActiveSkills([]spec.SkillDef{defA, defB}),
 	)
 	if !errors.Is(err, spec.ErrInvalidArgument) {
 		t.Fatalf("expected ErrInvalidArgument, got %v", err)
@@ -526,15 +352,13 @@ func TestRuntime_NewSession_MaxActiveOverride_AppliesToInitialActiveSkills(t *te
 }
 
 func TestRuntime_NewSession_UnknownActiveDef_ReturnsSkillNotFound(t *testing.T) {
-	t.Parallel()
-
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	t.Cleanup(cancel)
 
-	rt := mustNewRuntime(t, WithProvider(&fakeProvider{typ: "p"}))
+	rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "p"}))
 	// Provider exists, but skill is not in catalog.
 	_, _, err := rt.NewSession(ctx,
-		WithSessionActiveSkills([]spec.SkillDef{{Type: "p", Name: "missing", Location: "/missing"}}),
+		agentskills.WithSessionActiveSkills([]spec.SkillDef{{Type: "p", Name: "missing", Location: "/missing"}}),
 	)
 	if !errors.Is(err, spec.ErrSkillNotFound) {
 		t.Fatalf("expected ErrSkillNotFound, got %v", err)
@@ -542,12 +366,10 @@ func TestRuntime_NewSession_UnknownActiveDef_ReturnsSkillNotFound(t *testing.T) 
 }
 
 func TestRuntime_ListSkills_ActivityAndSessionFilters(t *testing.T) {
-	t.Parallel()
-
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	t.Cleanup(cancel)
 
-	rt := mustNewRuntime(t, WithProvider(&fakeProvider{typ: "p"}))
+	rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "p"}))
 
 	defA := spec.SkillDef{Type: "p", Name: "a", Location: "/a"}
 	defB := spec.SkillDef{Type: "p", Name: "b", Location: "/b"}
@@ -556,12 +378,12 @@ func TestRuntime_ListSkills_ActivityAndSessionFilters(t *testing.T) {
 	_ = mustAddSkill(t, rt, ctx, defB)
 	_ = mustAddSkill(t, rt, ctx, defC)
 
-	sid, _ := mustNewSession(t, rt, ctx, WithSessionActiveSkills([]spec.SkillDef{defA, defB}))
+	sid, _ := mustNewSession(t, rt, ctx, agentskills.WithSessionActiveSkills([]spec.SkillDef{defA, defB}))
 	t.Cleanup(func() { _ = rt.CloseSession(t.Context(), sid) })
 
 	tests := []struct {
 		name      string
-		filter    *SkillListFilter
+		filter    *agentskills.SkillListFilter
 		wantCount int
 		wantErr   error
 	}{
@@ -572,44 +394,47 @@ func TestRuntime_ListSkills_ActivityAndSessionFilters(t *testing.T) {
 		},
 		{
 			name:      "activity any with session => all records",
-			filter:    &SkillListFilter{SessionID: sid, Activity: SkillActivityAny},
+			filter:    &agentskills.SkillListFilter{SessionID: sid, Activity: agentskills.SkillActivityAny},
 			wantCount: 3,
 		},
 		{
 			name:      "activity active with session => only active",
-			filter:    &SkillListFilter{SessionID: sid, Activity: SkillActivityActive},
+			filter:    &agentskills.SkillListFilter{SessionID: sid, Activity: agentskills.SkillActivityActive},
 			wantCount: 2,
 		},
 		{
 			name:      "activity inactive with session => only inactive",
-			filter:    &SkillListFilter{SessionID: sid, Activity: SkillActivityInactive},
+			filter:    &agentskills.SkillListFilter{SessionID: sid, Activity: agentskills.SkillActivityInactive},
 			wantCount: 1,
 		},
 		{
 			name:      "activity inactive without session => treated like all",
-			filter:    &SkillListFilter{Activity: SkillActivityInactive},
+			filter:    &agentskills.SkillListFilter{Activity: agentskills.SkillActivityInactive},
 			wantCount: 3,
 		},
 		{
 			name:    "activity active without session => invalid argument",
-			filter:  &SkillListFilter{Activity: SkillActivityActive},
+			filter:  &agentskills.SkillListFilter{Activity: agentskills.SkillActivityActive},
 			wantErr: spec.ErrInvalidArgument,
 		},
 		{
 			name:    "invalid activity => invalid argument",
-			filter:  &SkillListFilter{Activity: SkillActivity("nope")},
+			filter:  &agentskills.SkillListFilter{Activity: agentskills.SkillActivity("nope")},
 			wantErr: spec.ErrInvalidArgument,
 		},
 		{
-			name:    "session missing => ErrSessionNotFound",
-			filter:  &SkillListFilter{SessionID: spec.SessionID("missing"), Activity: SkillActivityAny},
+			name: "session missing => ErrSessionNotFound",
+			filter: &agentskills.SkillListFilter{
+				SessionID: spec.SessionID("missing"),
+				Activity:  agentskills.SkillActivityAny,
+			},
 			wantErr: spec.ErrSessionNotFound,
 		},
 		{
 			name: "allowSkills applies + inactive: allow only A and C, but A is active => only C remains",
-			filter: &SkillListFilter{
+			filter: &agentskills.SkillListFilter{
 				SessionID:      sid,
-				Activity:       SkillActivityInactive,
+				Activity:       agentskills.SkillActivityInactive,
 				AllowSkills:    []spec.SkillDef{defA, defC},
 				NamePrefix:     "",
 				Types:          nil,
@@ -619,25 +444,23 @@ func TestRuntime_ListSkills_ActivityAndSessionFilters(t *testing.T) {
 		},
 		{
 			name:      "types filter",
-			filter:    &SkillListFilter{Types: []string{"p"}},
+			filter:    &agentskills.SkillListFilter{Types: []string{"p"}},
 			wantCount: 3,
 		},
 		{
 			name:      "name prefix filter uses host def name",
-			filter:    &SkillListFilter{NamePrefix: "b"},
+			filter:    &agentskills.SkillListFilter{NamePrefix: "b"},
 			wantCount: 1,
 		},
 		{
 			name:      "location prefix filter uses host def location",
-			filter:    &SkillListFilter{LocationPrefix: "/b"},
+			filter:    &agentskills.SkillListFilter{LocationPrefix: "/b"},
 			wantCount: 1,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
 			got, err := rt.ListSkills(ctx, tt.filter)
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
@@ -681,8 +504,8 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 	}
 
 	rt := mustNewRuntime(t,
-		WithLogger(slog.New(slog.DiscardHandler)),
-		WithProvider(p),
+		agentskills.WithLogger(slog.New(slog.DiscardHandler)),
+		agentskills.WithProvider(p),
 	)
 
 	// Add out of order to validate availableSkills sorting.
@@ -721,7 +544,7 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 	}
 
 	// Create session with initial active skills A then B (order should be preserved).
-	sid, activeDefs := mustNewSession(t, rt, ctx, WithSessionActiveSkills([]spec.SkillDef{defA, defB}))
+	sid, activeDefs := mustNewSession(t, rt, ctx, agentskills.WithSessionActiveSkills([]spec.SkillDef{defA, defB}))
 	t.Cleanup(func() { _ = rt.CloseSession(t.Context(), sid) })
 	if len(activeDefs) != 2 || activeDefs[0] != defA || activeDefs[1] != defB {
 		t.Fatalf("expected NewSession active defs order [A B], got %+v", activeDefs)
@@ -729,7 +552,10 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 
 	// ActivityAny + session => skillsPrompt wrapper with both sections.
 	before1 := p.loadBodyCalls.Load()
-	xml2, err := rt.SkillsPromptXML(ctx, &SkillFilter{SessionID: sid, Activity: SkillActivityAny})
+	xml2, err := rt.SkillsPromptXML(
+		ctx,
+		&agentskills.SkillFilter{SessionID: sid, Activity: agentskills.SkillActivityAny},
+	)
 	if err != nil {
 		t.Fatalf("SkillsPromptXML(any+session): %v", err)
 	}
@@ -747,7 +573,10 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 	}
 
 	// Calling prompt again should not trigger extra LoadBody calls (catalog cache).
-	xml2b, err := rt.SkillsPromptXML(ctx, &SkillFilter{SessionID: sid, Activity: SkillActivityAny})
+	xml2b, err := rt.SkillsPromptXML(
+		ctx,
+		&agentskills.SkillFilter{SessionID: sid, Activity: agentskills.SkillActivityAny},
+	)
 	if err != nil {
 		t.Fatalf("SkillsPromptXML(any+session) again: %v", err)
 	}
@@ -785,7 +614,10 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 	}
 
 	// ActivityActive => activeSkills root only.
-	xml3, err := rt.SkillsPromptXML(ctx, &SkillFilter{SessionID: sid, Activity: SkillActivityActive})
+	xml3, err := rt.SkillsPromptXML(
+		ctx,
+		&agentskills.SkillFilter{SessionID: sid, Activity: agentskills.SkillActivityActive},
+	)
 	if err != nil {
 		t.Fatalf("SkillsPromptXML(active): %v", err)
 	}
@@ -798,7 +630,10 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 	}
 
 	// ActivityInactive => availableSkills root only (inactive skills).
-	xml4, err := rt.SkillsPromptXML(ctx, &SkillFilter{SessionID: sid, Activity: SkillActivityInactive})
+	xml4, err := rt.SkillsPromptXML(
+		ctx,
+		&agentskills.SkillFilter{SessionID: sid, Activity: agentskills.SkillActivityInactive},
+	)
 	if err != nil {
 		t.Fatalf("SkillsPromptXML(inactive): %v", err)
 	}
@@ -812,9 +647,9 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 
 	// AllowSkills filter should apply to both active and available sections.
 	// Allow only C (inactive). Active should become empty, available should contain only C.
-	xml5, err := rt.SkillsPromptXML(ctx, &SkillFilter{
+	xml5, err := rt.SkillsPromptXML(ctx, &agentskills.SkillFilter{
 		SessionID:      sid,
-		Activity:       SkillActivityAny,
+		Activity:       agentskills.SkillActivityAny,
 		AllowSkills:    []spec.SkillDef{defC},
 		NamePrefix:     "",
 		Types:          nil,
@@ -848,7 +683,7 @@ func TestRuntime_SkillsPromptXML_NamePrefixIsLLMHandleNotHostName(t *testing.T) 
 
 	pa := &fakeProvider{typ: "a"}
 	pb := &fakeProvider{typ: "b"}
-	rt := mustNewRuntime(t, WithProvider(pa), WithProvider(pb))
+	rt := mustNewRuntime(t, agentskills.WithProvider(pa), agentskills.WithProvider(pb))
 
 	// Two skills with the same host name/location but different types must disambiguate at the LLM handle layer.
 	defA := spec.SkillDef{Type: "a", Name: "x", Location: "/same"}
@@ -856,7 +691,7 @@ func TestRuntime_SkillsPromptXML_NamePrefixIsLLMHandleNotHostName(t *testing.T) 
 	_ = mustAddSkill(t, rt, ctx, defA)
 	_ = mustAddSkill(t, rt, ctx, defB)
 
-	xmlAll, err := rt.SkillsPromptXML(ctx, &SkillFilter{Activity: SkillActivityAny})
+	xmlAll, err := rt.SkillsPromptXML(ctx, &agentskills.SkillFilter{Activity: agentskills.SkillActivityAny})
 	if err != nil {
 		t.Fatalf("SkillsPromptXML: %v", err)
 	}
@@ -879,7 +714,10 @@ func TestRuntime_SkillsPromptXML_NamePrefixIsLLMHandleNotHostName(t *testing.T) 
 	}
 
 	// Prompt NamePrefix uses LLM handle name.
-	xmlOne, err := rt.SkillsPromptXML(ctx, &SkillFilter{NamePrefix: pick, Activity: SkillActivityAny})
+	xmlOne, err := rt.SkillsPromptXML(
+		ctx,
+		&agentskills.SkillFilter{NamePrefix: pick, Activity: agentskills.SkillActivityAny},
+	)
 	if err != nil {
 		t.Fatalf("SkillsPromptXML(NamePrefix=%q): %v", pick, err)
 	}
@@ -893,7 +731,7 @@ func TestRuntime_SkillsPromptXML_NamePrefixIsLLMHandleNotHostName(t *testing.T) 
 
 	// Host listing NamePrefix uses host def name; using the LLM handle prefix should produce 0
 	// whenever the handle differs from "x".
-	recs, err := rt.ListSkills(ctx, &SkillListFilter{NamePrefix: pick})
+	recs, err := rt.ListSkills(ctx, &agentskills.SkillListFilter{NamePrefix: pick})
 	if err != nil {
 		t.Fatalf("ListSkills(NamePrefix=%q): %v", pick, err)
 	}
@@ -908,11 +746,11 @@ func TestRuntime_RemoveSkill_PrunesFromAllSessions_ReAddDoesNotResurrectActive(t
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	t.Cleanup(cancel)
 
-	rt := mustNewRuntime(t, WithProvider(&fakeProvider{typ: "p"}))
+	rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "p"}))
 	def := spec.SkillDef{Type: "p", Name: "a", Location: "/a"}
 	_ = mustAddSkill(t, rt, ctx, def)
 
-	sid, _ := mustNewSession(t, rt, ctx, WithSessionActiveSkills([]spec.SkillDef{def}))
+	sid, _ := mustNewSession(t, rt, ctx, agentskills.WithSessionActiveSkills([]spec.SkillDef{def}))
 	t.Cleanup(func() { _ = rt.CloseSession(t.Context(), sid) })
 
 	// Remove skill; this should prune from all sessions.
@@ -924,7 +762,10 @@ func TestRuntime_RemoveSkill_PrunesFromAllSessions_ReAddDoesNotResurrectActive(t
 	_ = mustAddSkill(t, rt, ctx, def)
 
 	// If prune didn't happen, the session would still consider it active after re-add.
-	xmlOut, err := rt.SkillsPromptXML(ctx, &SkillFilter{SessionID: sid, Activity: SkillActivityAny})
+	xmlOut, err := rt.SkillsPromptXML(
+		ctx,
+		&agentskills.SkillFilter{SessionID: sid, Activity: agentskills.SkillActivityAny},
+	)
 	if err != nil {
 		t.Fatalf("SkillsPromptXML: %v", err)
 	}
@@ -947,7 +788,7 @@ func TestRuntime_SkillsPromptXML_Errors(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	t.Cleanup(cancel)
 
-	rt := mustNewRuntime(t, WithProvider(&fakeProvider{typ: "p"}))
+	rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "p"}))
 
 	tests := []struct {
 		name    string
@@ -957,7 +798,7 @@ func TestRuntime_SkillsPromptXML_Errors(t *testing.T) {
 		{
 			name: "nil runtime receiver",
 			do: func() error {
-				var nilRT *Runtime
+				var nilRT *agentskills.Runtime
 				_, err := nilRT.SkillsPromptXML(ctx, nil)
 				return err
 			},
@@ -985,7 +826,7 @@ func TestRuntime_SkillsPromptXML_Errors(t *testing.T) {
 		{
 			name: "activity active requires session",
 			do: func() error {
-				_, err := rt.SkillsPromptXML(ctx, &SkillFilter{Activity: SkillActivityActive})
+				_, err := rt.SkillsPromptXML(ctx, &agentskills.SkillFilter{Activity: agentskills.SkillActivityActive})
 				return err
 			},
 			wantErr: spec.ErrInvalidArgument,
@@ -993,7 +834,7 @@ func TestRuntime_SkillsPromptXML_Errors(t *testing.T) {
 		{
 			name: "invalid activity",
 			do: func() error {
-				_, err := rt.SkillsPromptXML(ctx, &SkillFilter{Activity: SkillActivity("bad")})
+				_, err := rt.SkillsPromptXML(ctx, &agentskills.SkillFilter{Activity: agentskills.SkillActivity("bad")})
 				return err
 			},
 			wantErr: spec.ErrInvalidArgument,
@@ -1001,7 +842,10 @@ func TestRuntime_SkillsPromptXML_Errors(t *testing.T) {
 		{
 			name: "missing session id => ErrSessionNotFound",
 			do: func() error {
-				_, err := rt.SkillsPromptXML(ctx, &SkillFilter{SessionID: "missing", Activity: SkillActivityAny})
+				_, err := rt.SkillsPromptXML(
+					ctx,
+					&agentskills.SkillFilter{SessionID: "missing", Activity: agentskills.SkillActivityAny},
+				)
 				return err
 			},
 			wantErr: spec.ErrSessionNotFound,
@@ -1020,105 +864,10 @@ func TestRuntime_SkillsPromptXML_Errors(t *testing.T) {
 	}
 }
 
-func TestNormalizeSkillsPromptFilter(t *testing.T) {
-	t.Parallel()
-
-	in := &SkillFilter{
-		Types: []string{"  a  ", "a", "", " b "},
-		AllowSkills: []spec.SkillDef{
-			{}, // dropped
-			{Type: "t", Name: "n", Location: "l"},
-			{Type: "t", Name: "n", Location: "l"}, // dedupe
-			{Type: " ", Name: "n", Location: "l"}, // dropped
-		},
-		SessionID: "  sid  ",
-		Activity:  "",
-	}
-
-	got := normalizeSkillsPromptFilter(in)
-
-	// Types are trimmed + deduped (order not guaranteed).
-	if len(got.Types) != 2 {
-		t.Fatalf("expected 2 types, got %+v", got.Types)
-	}
-	hasA, hasB := false, false
-	for _, tpe := range got.Types {
-		if tpe == "a" {
-			hasA = true
-		}
-		if tpe == "b" {
-			hasB = true
-		}
-	}
-	if !hasA || !hasB {
-		t.Fatalf("unexpected types: %+v", got.Types)
-	}
-
-	if got.Activity != SkillActivityAny {
-		t.Fatalf("expected default activity any, got %q", got.Activity)
-	}
-	if got.SessionID != "sid" {
-		t.Fatalf("expected trimmed sessionID %q, got %q", "sid", got.SessionID)
-	}
-	if len(got.AllowSkills) != 1 {
-		t.Fatalf("expected 1 allow skill, got %d: %+v", len(got.AllowSkills), got.AllowSkills)
-	}
-	if got.AllowSkills[0] != (spec.SkillDef{Type: "t", Name: "n", Location: "l"}) {
-		t.Fatalf("unexpected allow skill: %+v", got.AllowSkills[0])
-	}
-}
-
-func TestNormalizeSkillListFilter(t *testing.T) {
-	t.Parallel()
-
-	in := &SkillListFilter{
-		Types: []string{"  a  ", "a", "", " b "},
-		AllowSkills: []spec.SkillDef{
-			{}, // dropped
-			{Type: "t", Name: "n", Location: "l"},
-			{Type: "t", Name: "n", Location: "l"}, // dedupe
-			{Type: " ", Name: "n", Location: "l"}, // dropped
-		},
-		SessionID: "  sid  ",
-		Activity:  "",
-	}
-
-	got := normalizeSkillListFilter(in)
-
-	if len(got.Types) != 2 {
-		t.Fatalf("expected 2 types, got %+v", got.Types)
-	}
-	hasA, hasB := false, false
-	for _, tpe := range got.Types {
-		if tpe == "a" {
-			hasA = true
-		}
-		if tpe == "b" {
-			hasB = true
-		}
-	}
-	if !hasA || !hasB {
-		t.Fatalf("unexpected types: %+v", got.Types)
-	}
-
-	if got.Activity != SkillActivityAny {
-		t.Fatalf("expected default activity any, got %q", got.Activity)
-	}
-	if got.SessionID != "sid" {
-		t.Fatalf("expected trimmed sessionID %q, got %q", "sid", got.SessionID)
-	}
-	if len(got.AllowSkills) != 1 {
-		t.Fatalf("expected 1 allow skill, got %d: %+v", len(got.AllowSkills), got.AllowSkills)
-	}
-	if got.AllowSkills[0] != (spec.SkillDef{Type: "t", Name: "n", Location: "l"}) {
-		t.Fatalf("unexpected allow skill: %+v", got.AllowSkills[0])
-	}
-}
-
 func TestRuntime_NewSessionRegistry_UnknownSession(t *testing.T) {
 	t.Parallel()
 
-	rt := mustNewRuntime(t, WithProvider(&fakeProvider{typ: "fake"}))
+	rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "fake"}))
 
 	_, err := rt.NewSessionRegistry(t.Context(), "missing")
 	if !errors.Is(err, spec.ErrSessionNotFound) {

@@ -23,6 +23,17 @@ var (
 	defaultAllowedScriptsExtensionNonWin = []string{".sh", ".py"}
 )
 
+type userLocationError struct {
+	input string
+	err   error
+}
+
+func (e userLocationError) Error() string {
+	return fmt.Sprintf("invalid skill location %q", e.input)
+}
+
+func (e userLocationError) Unwrap() error { return e.err }
+
 type Provider struct {
 	runScriptsEnabled   bool
 	execPolicy          exectool.ExecutionPolicy
@@ -323,6 +334,7 @@ func (p *Provider) RunScript(
 }
 
 func canonicalRoot(p string) (string, error) {
+	orig := p
 	root := strings.TrimSpace(p)
 	if root == "" {
 		return "", fmt.Errorf("%w: empty path", spec.ErrInvalidArgument)
@@ -345,7 +357,7 @@ func canonicalRoot(p string) (string, error) {
 
 	abs, err := filepath.Abs(clean)
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", spec.ErrInvalidArgument, err)
+		return "", fmt.Errorf("%w: %w", spec.ErrInvalidArgument, userLocationError{input: orig, err: err})
 	}
 	if resolved, rerr := filepath.EvalSymlinks(abs); rerr == nil && strings.TrimSpace(resolved) != "" {
 		abs = resolved
@@ -353,10 +365,10 @@ func canonicalRoot(p string) (string, error) {
 
 	st, err := os.Stat(abs)
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", spec.ErrInvalidArgument, err)
+		return "", fmt.Errorf("%w: %w", spec.ErrInvalidArgument, userLocationError{input: orig, err: err})
 	}
 	if !st.IsDir() {
-		return "", fmt.Errorf("%w: not a directory: %s", spec.ErrInvalidArgument, abs)
+		return "", fmt.Errorf("%w: not a directory: %q", spec.ErrInvalidArgument, orig)
 	}
 	return abs, nil
 }

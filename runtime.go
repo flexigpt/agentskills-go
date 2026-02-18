@@ -54,7 +54,7 @@ func WithProvider(p spec.SkillProvider) Option {
 	}
 }
 
-func WithProviders(m map[string]spec.SkillProvider) Option {
+func WithProvidersByType(m map[string]spec.SkillProvider) Option {
 	// Snapshot input map at option-creation time to prevent caller mutation affecting New().
 	snap := maps.Clone(m)
 

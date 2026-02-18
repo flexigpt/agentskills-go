@@ -343,6 +343,10 @@ func (c *Catalog) ListUserEntries(f UserFilter) []UserEntry {
 // Only when there is a collision on (Name, Location), we disambiguate WITHOUT leaking provider type:
 //
 //	"<name>#<shortHash>"
+//
+// IMPORTANT CONTRACT:
+//   - The shortHash MUST be derived from host/lifecycle-visible inputs (spec.SkillDef),
+//     not from provider-canonical/internal keys, so canonicalization never becomes LLM-visible.
 func (c *Catalog) recomputeLLMNamesLocked() {
 	// Base groups by (Name, Location) (no type).
 	type groupKey struct {
@@ -362,7 +366,7 @@ func (c *Catalog) recomputeLLMNamesLocked() {
 			continue
 		}
 		for _, e := range grp {
-			e.llmName = fmt.Sprintf("%s#%s", e.idx.Key.Name, shortHash(e.idx.Key))
+			e.llmName = fmt.Sprintf("%s#%s", e.idx.Key.Name, shortHashDef(e.def))
 		}
 	}
 
@@ -374,7 +378,7 @@ func (c *Catalog) recomputeLLMNamesLocked() {
 	for _, e := range c.byKey {
 		k := e.llmName + "\x00" + e.def.Location
 		if count[k] > 1 {
-			e.llmName = fmt.Sprintf("%s#%s", e.idx.Key.Name, shortHash(e.idx.Key))
+			e.llmName = fmt.Sprintf("%s#%s", e.idx.Key.Name, shortHashDef(e.def))
 		}
 	}
 
@@ -422,7 +426,7 @@ func normHandle(h spec.SkillHandle) handleKey {
 	}
 }
 
-func shortHash(k spec.ProviderSkillKey) string {
-	sum := sha256.Sum256([]byte(k.Type + "\x00" + k.Name + "\x00" + k.Location))
+func shortHashDef(d spec.SkillDef) string {
+	sum := sha256.Sum256([]byte(d.Type + "\x00" + d.Name + "\x00" + d.Location))
 	return hex.EncodeToString(sum[:])[:8]
 }
