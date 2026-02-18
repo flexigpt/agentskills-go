@@ -11,12 +11,12 @@ import (
 	"github.com/flexigpt/agentskills-go/spec"
 )
 
-func TestSession_ActivateKeys_ReplaceAddDedupeAndCanonicalize(t *testing.T) {
+func TestSession_ActivateKeys_ReplaceAdd_DedupeAndOrdering(t *testing.T) {
 	t.Parallel()
 
 	cat := newMemCatalog()
-	k1 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "abs"}}
-	k2 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "b", Location: "p2"}}
+	k1 := spec.ProviderSkillKey{Type: "t", Name: "a", Location: "p1"}
+	k2 := spec.ProviderSkillKey{Type: "t", Name: "b", Location: "p2"}
 	cat.add(k1, "B1")
 	cat.add(k2, "B2")
 
@@ -28,33 +28,64 @@ func TestSession_ActivateKeys_ReplaceAddDedupeAndCanonicalize(t *testing.T) {
 		Touch:               func() {},
 	})
 
-	hs, err := s.ActivateKeys(t.Context(), []spec.SkillKey{k1}, spec.LoadModeReplace)
-	if err != nil {
-		t.Fatalf("ActivateKeys replace: %v", err)
-	}
-	if len(hs) != 1 || hs[0].Name != "a" {
-		t.Fatalf("unexpected handles: %+v", hs)
+	steps := []struct {
+		name string
+		do   func(ctx context.Context) ([]spec.SkillHandle, error)
+		want []spec.SkillHandle
+	}{
+		{
+			name: "replace",
+			do: func(ctx context.Context) ([]spec.SkillHandle, error) {
+				return s.ActivateKeys(ctx, []spec.ProviderSkillKey{k1}, spec.LoadModeReplace)
+			},
+			want: []spec.SkillHandle{{Name: "a", Location: "p1"}},
+		},
+		{
+			name: "add_dedupes",
+			do: func(ctx context.Context) ([]spec.SkillHandle, error) {
+				return s.ActivateKeys(ctx, []spec.ProviderSkillKey{k1, k2, k2}, spec.LoadModeAdd)
+			},
+			want: []spec.SkillHandle{
+				{Name: "a", Location: "p1"},
+				{Name: "b", Location: "p2"},
+			},
+		},
+		{
+			name: "add_moves_requested_to_end",
+			do: func(ctx context.Context) ([]spec.SkillHandle, error) {
+				// Current order: [a,b]. Add [a] should become [b,a].
+				return s.ActivateKeys(ctx, []spec.ProviderSkillKey{k1}, spec.LoadModeAdd)
+			},
+			want: []spec.SkillHandle{
+				{Name: "b", Location: "p2"},
+				{Name: "a", Location: "p1"},
+			},
+		},
+		{
+			name: "empty_mode_defaults_to_replace",
+			do: func(ctx context.Context) ([]spec.SkillHandle, error) {
+				return s.ActivateKeys(ctx, []spec.ProviderSkillKey{k2}, spec.LoadMode(""))
+			},
+			want: []spec.SkillHandle{{Name: "b", Location: "p2"}},
+		},
 	}
 
-	hs, err = s.ActivateKeys(t.Context(), []spec.SkillKey{k1, k2, k2}, spec.LoadModeAdd)
-	if err != nil {
-		t.Fatalf("ActivateKeys add: %v", err)
-	}
-	if len(hs) != 2 || hs[0].Name != "a" || hs[1].Name != "b" {
-		t.Fatalf("unexpected handles after add: %+v", hs)
-	}
-
-	// Canonicalize: request with non-canonical key not in catalog, provider.Index normalizes to abs and matches.
-	hs, err = s.ActivateKeys(
-		t.Context(),
-		[]spec.SkillKey{{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "rel"}}},
-		spec.LoadModeReplace,
-	)
-	if err != nil {
-		t.Fatalf("ActivateKeys canonicalize: %v", err)
-	}
-	if len(hs) != 1 || hs[0].Name != "a" {
-		t.Fatalf("unexpected handles after canonicalize: %+v", hs)
+	for _, st := range steps {
+		t.Run(st.name, func(t *testing.T) {
+			t.Parallel()
+			hs, err := st.do(t.Context())
+			if err != nil {
+				t.Fatalf("ActivateKeys: %v", err)
+			}
+			if len(hs) != len(st.want) {
+				t.Fatalf("unexpected handle count: got=%d want=%d handles=%+v", len(hs), len(st.want), hs)
+			}
+			for i := range hs {
+				if hs[i] != st.want[i] {
+					t.Fatalf("unexpected handles[%d]: got=%+v want=%+v all=%+v", i, hs[i], st.want[i], hs)
+				}
+			}
+		})
 	}
 }
 
@@ -62,12 +93,12 @@ func TestSession_ActivateKeys_EnsureBodyErrorDoesNotCommit(t *testing.T) {
 	t.Parallel()
 
 	cat := newMemCatalog()
-	k1 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "p1"}}
-	k2 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "b", Location: "p2"}}
+	k1 := spec.ProviderSkillKey{Type: "t", Name: "a", Location: "p1"}
+	k2 := spec.ProviderSkillKey{Type: "t", Name: "b", Location: "p2"}
 	cat.add(k1, "ok")
 	cat.add(k2, "ok")
 
-	cat.ensureFn = func(ctx context.Context, k spec.SkillKey) (string, error) {
+	cat.ensureFn = func(ctx context.Context, k spec.ProviderSkillKey) (string, error) {
 		if k == k2 {
 			return "", errors.New("boom")
 		}
@@ -82,12 +113,11 @@ func TestSession_ActivateKeys_EnsureBodyErrorDoesNotCommit(t *testing.T) {
 		Touch:               func() {},
 	})
 
-	_, err := s.ActivateKeys(t.Context(), []spec.SkillKey{k1}, spec.LoadModeReplace)
-	if err != nil {
+	if _, err := s.ActivateKeys(t.Context(), []spec.ProviderSkillKey{k1}, spec.LoadModeReplace); err != nil {
 		t.Fatalf("activate k1: %v", err)
 	}
 
-	_, err = s.ActivateKeys(t.Context(), []spec.SkillKey{k2}, spec.LoadModeAdd)
+	_, err := s.ActivateKeys(t.Context(), []spec.ProviderSkillKey{k2}, spec.LoadModeAdd)
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("expected boom error, got %v", err)
 	}
@@ -104,8 +134,8 @@ func TestSession_ActivateKeys_MaxActiveIsInvalidArgument(t *testing.T) {
 	t.Parallel()
 
 	cat := newMemCatalog()
-	k1 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "p1"}}
-	k2 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "b", Location: "p2"}}
+	k1 := spec.ProviderSkillKey{Type: "t", Name: "a", Location: "p1"}
+	k2 := spec.ProviderSkillKey{Type: "t", Name: "b", Location: "p2"}
 	cat.add(k1, "ok")
 	cat.add(k2, "ok")
 
@@ -117,7 +147,7 @@ func TestSession_ActivateKeys_MaxActiveIsInvalidArgument(t *testing.T) {
 		Touch:               func() {},
 	})
 
-	_, err := s.ActivateKeys(t.Context(), []spec.SkillKey{k1, k2}, spec.LoadModeReplace)
+	_, err := s.ActivateKeys(t.Context(), []spec.ProviderSkillKey{k1, k2}, spec.LoadModeReplace)
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -130,8 +160,8 @@ func TestSession_ActivateKeys_RetriesOnConcurrentModification(t *testing.T) {
 	t.Parallel()
 
 	cat := newMemCatalog()
-	k1 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "p1"}}
-	k2 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "b", Location: "p2"}}
+	k1 := spec.ProviderSkillKey{Type: "t", Name: "a", Location: "p1"}
+	k2 := spec.ProviderSkillKey{Type: "t", Name: "b", Location: "p2"}
 	cat.add(k1, "ok")
 	cat.add(k2, "ok")
 
@@ -139,7 +169,7 @@ func TestSession_ActivateKeys_RetriesOnConcurrentModification(t *testing.T) {
 	release := make(chan struct{})
 	var blockOnce sync.Once
 
-	cat.ensureFn = func(ctx context.Context, k spec.SkillKey) (string, error) {
+	cat.ensureFn = func(ctx context.Context, k spec.ProviderSkillKey) (string, error) {
 		if k == k2 {
 			// ActivateKeys may retry and call EnsureBody multiple times.
 			// We only want to create the blocking window once.
@@ -159,22 +189,20 @@ func TestSession_ActivateKeys_RetriesOnConcurrentModification(t *testing.T) {
 		Touch:               func() {},
 	})
 
-	_, err := s.ActivateKeys(t.Context(), []spec.SkillKey{k1}, spec.LoadModeReplace)
-	if err != nil {
+	if _, err := s.ActivateKeys(t.Context(), []spec.ProviderSkillKey{k1}, spec.LoadModeReplace); err != nil {
 		t.Fatalf("activate k1: %v", err)
 	}
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := s.ActivateKeys(t.Context(), []spec.SkillKey{k2}, spec.LoadModeAdd)
+		_, err := s.ActivateKeys(t.Context(), []spec.ProviderSkillKey{k2}, spec.LoadModeAdd)
 		done <- err
 	}()
 
 	<-block // ensure ActivateKeys is between snapshot and commit (blocked in EnsureBody)
 
 	// Concurrent mutation: unload all.
-	_, uerr := s.toolUnload(t.Context(), spec.UnloadArgs{All: true})
-	if uerr != nil {
+	if _, uerr := s.toolUnload(t.Context(), spec.UnloadArgs{All: true}); uerr != nil {
 		t.Fatalf("toolUnload(all): %v", uerr)
 	}
 
@@ -204,7 +232,7 @@ func TestSession_ActiveKeys_PrunesMissingCatalogSkills(t *testing.T) {
 	t.Cleanup(cancel)
 
 	cat := newToggleCatalog()
-	k := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "p1"}}
+	k := spec.ProviderSkillKey{Type: "t", Name: "a", Location: "p1"}
 	cat.put(k, "body")
 
 	s := newSession(SessionConfig{
@@ -215,7 +243,7 @@ func TestSession_ActiveKeys_PrunesMissingCatalogSkills(t *testing.T) {
 		Touch:               func() {},
 	})
 
-	if _, err := s.ActivateKeys(ctx, []spec.SkillKey{k}, spec.LoadModeReplace); err != nil {
+	if _, err := s.ActivateKeys(ctx, []spec.ProviderSkillKey{k}, spec.LoadModeReplace); err != nil {
 		t.Fatalf("ActivateKeys: %v", err)
 	}
 
@@ -244,14 +272,14 @@ func TestSession_ActivateKeys_SkillRemovedDuringActivation_DoesNotCommit(t *test
 	t.Cleanup(cancel)
 
 	cat := newToggleCatalog()
-	k1 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "p1"}}
-	k2 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "b", Location: "p2"}}
+	k1 := spec.ProviderSkillKey{Type: "t", Name: "a", Location: "p1"}
+	k2 := spec.ProviderSkillKey{Type: "t", Name: "b", Location: "p2"}
 	cat.put(k1, "body-a")
 	cat.put(k2, "body-b")
 
 	block := make(chan struct{})
 	release := make(chan struct{})
-	cat.ensureFn = func(ctx context.Context, k spec.SkillKey) (string, error) {
+	cat.ensureFn = func(ctx context.Context, k spec.ProviderSkillKey) (string, error) {
 		if k == k2 {
 			close(block)
 			<-release
@@ -268,17 +296,18 @@ func TestSession_ActivateKeys_SkillRemovedDuringActivation_DoesNotCommit(t *test
 	})
 
 	// Baseline active set.
-	if _, err := s.ActivateKeys(ctx, []spec.SkillKey{k1}, spec.LoadModeReplace); err != nil {
+	if _, err := s.ActivateKeys(ctx, []spec.ProviderSkillKey{k1}, spec.LoadModeReplace); err != nil {
 		t.Fatalf("ActivateKeys(k1): %v", err)
 	}
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := s.ActivateKeys(ctx, []spec.SkillKey{k2}, spec.LoadModeAdd)
+		_, err := s.ActivateKeys(ctx, []spec.ProviderSkillKey{k2}, spec.LoadModeAdd)
 		done <- err
 	}()
 
 	<-block
+
 	// Simulate concurrent removal from catalog while activation is in-flight.
 	cat.remove(k2)
 	close(release)
@@ -296,63 +325,163 @@ func TestSession_ActivateKeys_SkillRemovedDuringActivation_DoesNotCommit(t *test
 	}
 }
 
+func TestSession_ActivateKeys_ValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	cat := newMemCatalog()
+	k1 := spec.ProviderSkillKey{Type: "t", Name: "a", Location: "p1"}
+	cat.add(k1, "ok")
+
+	s := newSession(SessionConfig{
+		ID:                  "id",
+		Catalog:             cat,
+		Providers:           mapResolver{"t": &canonProvider{typ: "t"}},
+		MaxActivePerSession: 8,
+		Touch:               func() {},
+	})
+
+	cases := []struct {
+		name   string
+		ctx    context.Context
+		closed bool
+		keys   []spec.ProviderSkillKey
+		mode   spec.LoadMode
+		isErr  func(error) bool
+	}{
+		{
+			name: "invalid_mode",
+			ctx:  t.Context(),
+			keys: []spec.ProviderSkillKey{k1},
+			mode: spec.LoadMode("nope"),
+			isErr: func(err error) bool {
+				return errors.Is(err, spec.ErrInvalidArgument)
+			},
+		},
+		{
+			name: "empty_keys",
+			ctx:  t.Context(),
+			keys: nil,
+			mode: spec.LoadModeReplace,
+			isErr: func(err error) bool {
+				return errors.Is(err, spec.ErrInvalidArgument)
+			},
+		},
+		{
+			name: "unknown_key",
+			ctx:  t.Context(),
+			keys: []spec.ProviderSkillKey{{Type: "t", Name: "missing", Location: "p2"}},
+			mode: spec.LoadModeReplace,
+			isErr: func(err error) bool {
+				return errors.Is(err, spec.ErrSkillNotFound)
+			},
+		},
+		{
+			name: "closed_session",
+			ctx:  t.Context(),
+			keys: []spec.ProviderSkillKey{k1},
+			mode: spec.LoadModeReplace,
+			isErr: func(err error) bool {
+				return errors.Is(err, spec.ErrSessionNotFound)
+			},
+			closed: true,
+		},
+		{
+			name: "ctx_canceled",
+			ctx: func() context.Context {
+				ctx, cancel := context.WithCancel(t.Context())
+				cancel()
+				return ctx
+			}(),
+			keys: []spec.ProviderSkillKey{k1},
+			mode: spec.LoadModeReplace,
+			isErr: func(err error) bool {
+				return errors.Is(err, context.Canceled)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if tc.closed {
+				s.closed.Store(true)
+				t.Cleanup(func() { s.closed.Store(false) })
+			}
+
+			_, err := s.ActivateKeys(tc.ctx, tc.keys, tc.mode)
+			if err == nil || !tc.isErr(err) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 type toggleCatalog struct {
-	mu       sync.Mutex
-	recs     map[spec.SkillKey]spec.SkillRecord
-	bodies   map[spec.SkillKey]string
-	ensureFn func(ctx context.Context, k spec.SkillKey) (string, error)
+	mu      sync.Mutex
+	indexes map[spec.ProviderSkillKey]spec.ProviderSkillIndexRecord
+	bodies  map[spec.ProviderSkillKey]string
+	handles map[spec.ProviderSkillKey]spec.SkillHandle
+
+	ensureFn func(ctx context.Context, k spec.ProviderSkillKey) (string, error)
 }
 
 func newToggleCatalog() *toggleCatalog {
 	return &toggleCatalog{
-		recs:   map[spec.SkillKey]spec.SkillRecord{},
-		bodies: map[spec.SkillKey]string{},
+		indexes: map[spec.ProviderSkillKey]spec.ProviderSkillIndexRecord{},
+		bodies:  map[spec.ProviderSkillKey]string{},
+		handles: map[spec.ProviderSkillKey]spec.SkillHandle{},
 	}
 }
 
-func (c *toggleCatalog) ResolveHandle(h spec.SkillHandle) (spec.SkillKey, bool) {
-	// Not needed for these tests.
-	return spec.SkillKey{}, false
-}
-
-func (c *toggleCatalog) HandleForKey(key spec.SkillKey) (spec.SkillHandle, bool) {
+func (c *toggleCatalog) ResolveHandle(h spec.SkillHandle) (spec.ProviderSkillKey, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.recs[key]; !ok {
-		return spec.SkillHandle{}, false
+	for k, hh := range c.handles {
+		if hh == h {
+			return k, true
+		}
 	}
-	return spec.SkillHandle{Name: key.Name, Location: key.Location}, true
+	return spec.ProviderSkillKey{}, false
 }
 
-func (c *toggleCatalog) EnsureBody(ctx context.Context, key spec.SkillKey) (string, error) {
+func (c *toggleCatalog) HandleForKey(key spec.ProviderSkillKey) (spec.SkillHandle, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	h, ok := c.handles[key]
+	return h, ok
+}
+
+func (c *toggleCatalog) EnsureBody(ctx context.Context, key spec.ProviderSkillKey) (string, error) {
 	if c.ensureFn != nil {
 		return c.ensureFn(ctx, key)
 	}
 	return c.defaultEnsureBody(ctx, key)
 }
 
-func (c *toggleCatalog) Get(key spec.SkillKey) (spec.SkillRecord, bool) {
+func (c *toggleCatalog) GetIndex(key spec.ProviderSkillKey) (spec.ProviderSkillIndexRecord, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	rec, ok := c.recs[key]
+	rec, ok := c.indexes[key]
 	return rec, ok
 }
 
-func (c *toggleCatalog) put(k spec.SkillKey, body string) {
+func (c *toggleCatalog) put(k spec.ProviderSkillKey, body string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.recs[k] = spec.SkillRecord{Key: k, Description: "d:" + k.Name}
+	c.indexes[k] = spec.ProviderSkillIndexRecord{Key: k, Description: "d:" + k.Name}
 	c.bodies[k] = body
+	c.handles[k] = spec.SkillHandle{Name: k.Name, Location: k.Location}
 }
 
-func (c *toggleCatalog) remove(k spec.SkillKey) {
+func (c *toggleCatalog) remove(k spec.ProviderSkillKey) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.recs, k)
+	delete(c.indexes, k)
 	delete(c.bodies, k)
+	delete(c.handles, k)
 }
 
-func (c *toggleCatalog) defaultEnsureBody(ctx context.Context, key spec.SkillKey) (string, error) {
+func (c *toggleCatalog) defaultEnsureBody(ctx context.Context, key spec.ProviderSkillKey) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}

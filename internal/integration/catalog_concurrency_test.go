@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -27,23 +28,29 @@ type blockingProvider struct {
 
 func (p *blockingProvider) Type() string { return "fake" }
 
-func (p *blockingProvider) Index(ctx context.Context, key spec.SkillKey) (spec.SkillRecord, error) {
-	return spec.SkillRecord{
-		Key:         key,
+func (p *blockingProvider) Index(ctx context.Context, def spec.SkillDef) (spec.ProviderSkillIndexRecord, error) {
+	return spec.ProviderSkillIndexRecord{
+		Key:         spec.ProviderSkillKey(def),
 		Description: "desc",
 	}, nil
 }
 
-func (p *blockingProvider) LoadBody(ctx context.Context, key spec.SkillKey) (string, error) {
+func (p *blockingProvider) LoadBody(ctx context.Context, key spec.ProviderSkillKey) (string, error) {
+	// Signal that the load has started and then block until released.
 	close(p.loadStarted)
-	<-p.release
-	return "body", nil
+
+	select {
+	case <-p.release:
+		return "body", nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
 }
 
 func (p *blockingProvider) ReadResource(
 	ctx context.Context,
-	key spec.SkillKey,
-	resourcePath string,
+	key spec.ProviderSkillKey,
+	resourceLocation string,
 	encoding spec.ReadResourceEncoding,
 ) ([]llmtoolsgoSpec.ToolOutputUnion, error) {
 	return nil, spec.ErrInvalidArgument
@@ -51,11 +58,11 @@ func (p *blockingProvider) ReadResource(
 
 func (p *blockingProvider) RunScript(
 	ctx context.Context,
-	key spec.SkillKey,
-	scriptPath string,
+	key spec.ProviderSkillKey,
+	scriptLocation string,
 	args []string,
 	env map[string]string,
-	workdir string,
+	workDir string,
 ) (spec.RunScriptOut, error) {
 	return spec.RunScriptOut{}, spec.ErrRunScriptUnsupported
 }
@@ -69,32 +76,42 @@ func TestCatalog_EnsureBody_WaitHonorsContext_AndRemoveDoesNotPanic(t *testing.T
 	}
 	cat := catalog.New(fakeResolver{p: p})
 
-	key := spec.SkillKey{Type: "fake", SkillHandle: spec.SkillHandle{Name: "s", Location: "/x"}}
-
-	_, err := cat.Add(t.Context(), key)
-	if err != nil {
-		t.Fatalf("add: %v", err)
+	def := spec.SkillDef{
+		Type:     "fake",
+		Name:     "s",
+		Location: "/x",
 	}
 
-	// Start loader.
+	if _, err := cat.Add(t.Context(), def); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	psKey, isPresent := cat.ResolveDef(def)
+	if !isPresent {
+		t.Fatalf("could not find added definition")
+	}
+
+	// Start a loader that will block inside provider.LoadBody.
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		_, _ = cat.EnsureBody(t.Context(), key)
+		_, _ = cat.EnsureBody(t.Context(), psKey)
 	})
 
 	<-p.loadStarted // ensure in-flight load exists
 
-	// Start a waiter that cancels quickly: must not block on <-ch forever.
+	// Start a waiter that cancels quickly: must not block forever waiting for the in-flight load.
 	waitCtx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 
-	_, werr := cat.EnsureBody(waitCtx, key)
+	_, werr := cat.EnsureBody(waitCtx, psKey)
 	if werr == nil {
 		t.Fatalf("expected context timeout/cancel error for waiter")
 	}
+	if !errors.Is(werr, context.DeadlineExceeded) && !errors.Is(werr, context.Canceled) {
+		t.Fatalf("expected deadline/cancel error, got: %v", werr)
+	}
 
-	// Remove while load in-flight; should not panic (double-close) and should wake waiters.
-	_, _ = cat.Remove(key)
+	// Remove while load in-flight; should not panic (e.g. double-close) and should wake waiters.
+	_, _, _ = cat.Remove(def)
 
 	// Release provider to let loader finish.
 	close(p.release)

@@ -131,53 +131,57 @@ func New(opts ...Option) (*Provider, error) {
 
 func (p *Provider) Type() string { return Type }
 
-func (p *Provider) Index(ctx context.Context, key spec.SkillKey) (spec.SkillRecord, error) {
+func (p *Provider) Index(ctx context.Context, def spec.SkillDef) (spec.ProviderSkillIndexRecord, error) {
 	if err := ctx.Err(); err != nil {
-		return spec.SkillRecord{}, err
+		return spec.ProviderSkillIndexRecord{}, err
 	}
-	if strings.TrimSpace(key.Type) == "" {
-		return spec.SkillRecord{}, fmt.Errorf("%w: key.type is required", spec.ErrInvalidArgument)
+	if strings.TrimSpace(def.Type) == "" {
+		return spec.ProviderSkillIndexRecord{}, fmt.Errorf("%w: def.type is required", spec.ErrInvalidArgument)
 	}
-	if key.Type != Type {
-		return spec.SkillRecord{}, fmt.Errorf("%w: wrong provider type: %q", spec.ErrInvalidArgument, key.Type)
+	if def.Type != Type {
+		return spec.ProviderSkillIndexRecord{}, fmt.Errorf(
+			"%w: wrong provider type: %q",
+			spec.ErrInvalidArgument,
+			def.Type,
+		)
 	}
-	if strings.TrimSpace(key.Name) == "" {
-		return spec.SkillRecord{}, fmt.Errorf("%w: key.name is required", spec.ErrInvalidArgument)
+	if strings.TrimSpace(def.Name) == "" {
+		return spec.ProviderSkillIndexRecord{}, fmt.Errorf("%w: def.name is required", spec.ErrInvalidArgument)
 	}
-	if strings.TrimSpace(key.Location) == "" {
-		return spec.SkillRecord{}, fmt.Errorf("%w: key.location is required", spec.ErrInvalidArgument)
+	if strings.TrimSpace(def.Location) == "" {
+		return spec.ProviderSkillIndexRecord{}, fmt.Errorf("%w: def.location is required", spec.ErrInvalidArgument)
 	}
 
-	root, err := canonicalRoot(key.Location)
+	root, err := canonicalRoot(def.Location)
 	if err != nil {
-		return spec.SkillRecord{}, err
+		return spec.ProviderSkillIndexRecord{}, err
 	}
 
 	name, desc, props, digest, err := indexSkillDir(ctx, root)
 	if err != nil {
-		return spec.SkillRecord{}, err
+		return spec.ProviderSkillIndexRecord{}, err
 	}
 
-	if name != key.Name {
-		return spec.SkillRecord{}, fmt.Errorf(
+	if name != def.Name {
+		return spec.ProviderSkillIndexRecord{}, fmt.Errorf(
 			"%w: key.name=%q does not match SKILL.md frontmatter.name=%q",
 			spec.ErrInvalidArgument,
-			key.Name,
+
+			def.Name,
 			name,
 		)
 	}
 
-	key.Location = root // normalize path in the returned record
-
-	return spec.SkillRecord{
-		Key:         key,
+	k := spec.ProviderSkillKey{Type: def.Type, Name: def.Name, Location: root} // canonical/internal
+	return spec.ProviderSkillIndexRecord{
+		Key:         k,
 		Description: desc,
 		Properties:  props,
 		Digest:      digest,
 	}, nil
 }
 
-func (p *Provider) LoadBody(ctx context.Context, key spec.SkillKey) (string, error) {
+func (p *Provider) LoadBody(ctx context.Context, key spec.ProviderSkillKey) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -193,7 +197,7 @@ func (p *Provider) LoadBody(ctx context.Context, key spec.SkillKey) (string, err
 
 func (p *Provider) ReadResource(
 	ctx context.Context,
-	key spec.SkillKey,
+	key spec.ProviderSkillKey,
 	resourceLocation string,
 	encoding spec.ReadResourceEncoding,
 ) ([]llmtoolsgoSpec.ToolOutputUnion, error) {
@@ -260,7 +264,7 @@ func (p *Provider) ReadResource(
 // Note: By design, scripts may live anywhere under the skill root (ideally under "scripts/").
 func (p *Provider) RunScript(
 	ctx context.Context,
-	key spec.SkillKey,
+	key spec.ProviderSkillKey,
 	scriptLocation string,
 	args []string,
 	env map[string]string,

@@ -27,16 +27,20 @@ const (
 	SkillActivityInactive SkillActivity = "inactive"
 )
 
-// SkillFilter is an optional filter for listing/prompting skills.
+// SkillFilter is an optional filter for listing/prompting skills (LLM/prompt-facing).
 //
 // Semantics:
-//   - Types/NamePrefix/LocationPrefix/AllowKeys always apply.
+//   - Types/NamePrefix/LocationPrefix/AllowSkills always apply.
 //   - SessionID (optional) allows filtering/annotating by "active in this session".
 //   - Activity controls whether to include active, inactive, or both.
 //
 // Defaults:
 //   - Activity defaults to "any".
 //   - If SessionID is empty, no active skills exist.
+//
+// IMPORTANT CONTRACT:
+//   - NamePrefix matches the LLM-visible computed handle name (not the host skill def name).
+//   - LocationPrefix matches the user-provided location (not provider-canonicalized).
 type SkillFilter struct {
 	// Types restricts to provider types (e.g. ["fs"]). Empty means "all".
 	Types []string
@@ -44,17 +48,30 @@ type SkillFilter struct {
 	// NamePrefix restricts to LLM-visible names with this prefix.
 	NamePrefix string
 
-	// LocationPrefix restricts to skills whose base location starts with this prefix.
+	// LocationPrefix restricts to skills whose (user-provided) location starts with this prefix.
 	LocationPrefix string
 
-	// AllowKeys restricts to an explicit allowlist of skill keys. Empty means "all".
-	AllowKeys []spec.SkillKey
+	// AllowSkills restricts to an explicit allowlist of host/lifecycle skill defs. Empty means "all".
+	AllowSkills []spec.SkillDef
 
 	// SessionID optionally scopes active/inactive filtering.
 	SessionID spec.SessionID
 
 	// Activity defaults to SkillActivityAny.
 	Activity SkillActivity
+}
+
+// SkillListFilter is a HOST/LIFECYCLE listing filter.
+// Unlike SkillFilter (prompt), NamePrefix applies to the user-provided skill name (def.name),
+// not the LLM-visible computed handle name.
+type SkillListFilter struct {
+	Types          []string
+	NamePrefix     string
+	LocationPrefix string
+	AllowSkills    []spec.SkillDef
+
+	SessionID spec.SessionID
+	Activity  SkillActivity
 }
 
 // SkillsPromptXML is the single prompt API.
@@ -91,12 +108,12 @@ func (r *Runtime) SkillsPromptXML(ctx context.Context, f *SkillFilter) (string, 
 		return "", fmt.Errorf("%w: invalid activity %q", spec.ErrInvalidArgument, cfg.Activity)
 	}
 
-	// Base catalog filtering (Types/NamePrefix/LocationPrefix/AllowKeys).
-	records := r.catalog.ListRecords(toCatalogFilter(&cfg))
+	// Base catalog filtering (Types/NamePrefix/LocationPrefix/AllowSkills).
+	records := r.catalog.ListPromptIndexRecords(toCatalogPromptFilter(&cfg))
 
 	// Resolve session + active set (optional).
-	var activeOrder []spec.SkillKey
-	activeSet := map[spec.SkillKey]struct{}{}
+	var activeOrder []spec.ProviderSkillKey
+	activeSet := map[spec.ProviderSkillKey]struct{}{}
 	if cfg.SessionID != "" {
 		s, ok := r.sessions.Get(string(cfg.SessionID))
 		if !ok {
@@ -121,10 +138,11 @@ func (r *Runtime) SkillsPromptXML(ctx context.Context, f *SkillFilter) (string, 
 	if includeActive && cfg.SessionID != "" {
 		// Build membership set for "records" (filtered catalog view), so active section
 		// respects the same filters.
-		filtered := make(map[spec.SkillKey]struct{}, len(records))
+		filtered := make(map[spec.ProviderSkillKey]struct{}, len(records))
 		for _, rec := range records {
 			filtered[rec.Key] = struct{}{}
 		}
+
 		items := make([]catalog.ActiveSkillItem, 0, len(activeOrder))
 		for _, k := range activeOrder {
 			if _, ok := filtered[k]; !ok {
@@ -143,6 +161,7 @@ func (r *Runtime) SkillsPromptXML(ctx context.Context, f *SkillFilter) (string, 
 			}
 			items = append(items, catalog.ActiveSkillItem{Name: h.Name, Body: body})
 		}
+
 		var err error
 		activeXML, err = catalog.ActiveSkillsXML(items)
 		if err != nil {
@@ -197,6 +216,61 @@ func (r *Runtime) SkillsPromptXML(ctx context.Context, f *SkillFilter) (string, 
 	return wrapSkillsPromptXML(availableXML, activeXML), nil
 }
 
+func normalizeSkillListFilter(f *SkillListFilter) SkillListFilter {
+	if f == nil {
+		return SkillListFilter{Activity: SkillActivityAny}
+	}
+	types := make([]string, 0, len(f.Types))
+	seenT := map[string]struct{}{}
+	for _, t := range f.Types {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		if _, ok := seenT[t]; ok {
+			continue
+		}
+		seenT[t] = struct{}{}
+		types = append(types, t)
+	}
+	allow := make([]spec.SkillDef, 0, len(f.AllowSkills))
+	seenD := map[spec.SkillDef]struct{}{}
+	for _, d := range f.AllowSkills {
+		if strings.TrimSpace(d.Type) == "" || strings.TrimSpace(d.Name) == "" || strings.TrimSpace(d.Location) == "" {
+			continue
+		}
+		if _, ok := seenD[d]; ok {
+			continue
+		}
+		seenD[d] = struct{}{}
+		allow = append(allow, d)
+	}
+	act := SkillActivity(strings.TrimSpace(string(f.Activity)))
+	if act == "" {
+		act = SkillActivityAny
+	}
+	return SkillListFilter{
+		Types:          types,
+		NamePrefix:     f.NamePrefix,
+		LocationPrefix: f.LocationPrefix,
+		AllowSkills:    allow,
+		SessionID:      spec.SessionID(strings.TrimSpace(string(f.SessionID))),
+		Activity:       act,
+	}
+}
+
+func toCatalogUserFilter(f *SkillListFilter) catalog.UserFilter {
+	if f == nil {
+		return catalog.UserFilter{}
+	}
+	return catalog.UserFilter{
+		Types:          append([]string(nil), f.Types...),
+		NamePrefix:     f.NamePrefix,
+		LocationPrefix: f.LocationPrefix,
+		AllowDefs:      append([]spec.SkillDef(nil), f.AllowSkills...),
+	}
+}
+
 func normalizeSkillsPromptFilter(f *SkillFilter) SkillFilter {
 	if f == nil {
 		return SkillFilter{Activity: SkillActivityAny}
@@ -216,18 +290,18 @@ func normalizeSkillsPromptFilter(f *SkillFilter) SkillFilter {
 		types = append(types, t)
 	}
 
-	allow := make([]spec.SkillKey, 0, len(f.AllowKeys))
-	seenK := map[spec.SkillKey]struct{}{}
-	for _, k := range f.AllowKeys {
+	allow := make([]spec.SkillDef, 0, len(f.AllowSkills))
+	seenD := map[spec.SkillDef]struct{}{}
+	for _, d := range f.AllowSkills {
 		// Keep strict equality semantics; just drop obviously empty entries.
-		if strings.TrimSpace(k.Type) == "" || strings.TrimSpace(k.Name) == "" || strings.TrimSpace(k.Location) == "" {
+		if strings.TrimSpace(d.Type) == "" || strings.TrimSpace(d.Name) == "" || strings.TrimSpace(d.Location) == "" {
 			continue
 		}
-		if _, ok := seenK[k]; ok {
+		if _, ok := seenD[d]; ok {
 			continue
 		}
-		seenK[k] = struct{}{}
-		allow = append(allow, k)
+		seenD[d] = struct{}{}
+		allow = append(allow, d)
 	}
 
 	act := SkillActivity(strings.TrimSpace(string(f.Activity)))
@@ -239,7 +313,7 @@ func normalizeSkillsPromptFilter(f *SkillFilter) SkillFilter {
 		Types:          types,
 		NamePrefix:     f.NamePrefix,
 		LocationPrefix: f.LocationPrefix,
-		AllowKeys:      allow,
+		AllowSkills:    allow,
 		SessionID:      spec.SessionID(strings.TrimSpace(string(f.SessionID))),
 		Activity:       act,
 	}
@@ -275,14 +349,14 @@ func indentLines(s, prefix string) string {
 	return strings.Join(lines, "\n")
 }
 
-func toCatalogFilter(f *SkillFilter) catalog.Filter {
+func toCatalogPromptFilter(f *SkillFilter) catalog.PromptFilter {
 	if f == nil {
-		return catalog.Filter{}
+		return catalog.PromptFilter{}
 	}
-	return catalog.Filter{
+	return catalog.PromptFilter{
 		Types:          append([]string(nil), f.Types...),
-		NamePrefix:     f.NamePrefix,
+		LLMNamePrefix:  f.NamePrefix,
 		LocationPrefix: f.LocationPrefix,
-		AllowKeys:      append([]spec.SkillKey(nil), f.AllowKeys...),
+		AllowDefs:      append([]spec.SkillDef(nil), f.AllowSkills...),
 	}
 }

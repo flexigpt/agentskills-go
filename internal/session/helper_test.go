@@ -20,46 +20,45 @@ func (r mapResolver) Provider(skillType string) (spec.SkillProvider, bool) {
 type memCatalog struct {
 	mu sync.Mutex
 
-	recs    map[spec.SkillKey]spec.SkillRecord
-	bodies  map[spec.SkillKey]string
-	handles map[spec.SkillKey]spec.SkillHandle
+	indexes     map[spec.ProviderSkillKey]spec.ProviderSkillIndexRecord
+	bodies      map[spec.ProviderSkillKey]string
+	handles     map[spec.ProviderSkillKey]spec.SkillHandle
+	handleToKey map[spec.SkillHandle]spec.ProviderSkillKey
 
-	ensureFn func(context.Context, spec.SkillKey) (string, error)
+	ensureFn func(context.Context, spec.ProviderSkillKey) (string, error)
 }
 
 func newMemCatalog() *memCatalog {
 	return &memCatalog{
-		recs:    map[spec.SkillKey]spec.SkillRecord{},
-		bodies:  map[spec.SkillKey]string{},
-		handles: map[spec.SkillKey]spec.SkillHandle{},
+		indexes:     map[spec.ProviderSkillKey]spec.ProviderSkillIndexRecord{},
+		bodies:      map[spec.ProviderSkillKey]string{},
+		handles:     map[spec.ProviderSkillKey]spec.SkillHandle{},
+		handleToKey: map[spec.SkillHandle]spec.ProviderSkillKey{},
 	}
 }
 
-func (c *memCatalog) ResolveHandle(h spec.SkillHandle) (spec.SkillKey, bool) {
+func (c *memCatalog) ResolveHandle(h spec.SkillHandle) (spec.ProviderSkillKey, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for k, hh := range c.handles {
-		if hh == h {
-			return k, true
-		}
-	}
-	return spec.SkillKey{}, false
+	k, ok := c.handleToKey[h]
+	return k, ok
 }
 
-func (c *memCatalog) HandleForKey(key spec.SkillKey) (spec.SkillHandle, bool) {
+func (c *memCatalog) HandleForKey(key spec.ProviderSkillKey) (spec.SkillHandle, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	h, ok := c.handles[key]
 	return h, ok
 }
 
-func (c *memCatalog) EnsureBody(ctx context.Context, key spec.SkillKey) (string, error) {
+func (c *memCatalog) EnsureBody(ctx context.Context, key spec.ProviderSkillKey) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	if c.ensureFn != nil {
 		return c.ensureFn(ctx, key)
 	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	b, ok := c.bodies[key]
@@ -69,45 +68,65 @@ func (c *memCatalog) EnsureBody(ctx context.Context, key spec.SkillKey) (string,
 	return b, nil
 }
 
-func (c *memCatalog) Get(key spec.SkillKey) (spec.SkillRecord, bool) {
+func (c *memCatalog) GetIndex(key spec.ProviderSkillKey) (spec.ProviderSkillIndexRecord, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	r, ok := c.recs[key]
+	r, ok := c.indexes[key]
 	return r, ok
 }
 
-func (c *memCatalog) add(k spec.SkillKey, body string) {
+func (c *memCatalog) add(k spec.ProviderSkillKey, body string) {
+	c.addWithHandle(k, spec.SkillHandle{Name: k.Name, Location: k.Location}, body)
+}
+
+func (c *memCatalog) addWithHandle(k spec.ProviderSkillKey, h spec.SkillHandle, body string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.recs[k] = spec.SkillRecord{Key: k, Description: "d-" + k.Name}
+
+	c.indexes[k] = spec.ProviderSkillIndexRecord{
+		Key:         k,
+		Description: "d-" + k.Name,
+	}
 	c.bodies[k] = body
-	c.handles[k] = spec.SkillHandle{Name: k.Name, Location: k.Location}
+
+	c.handles[k] = h
+	c.handleToKey[h] = k
 }
 
 type canonProvider struct {
 	typ string
-	// If key.Path == "rel", normalize to "abs".
+	// If def.Location == "rel", normalize to "abs".
 }
 
 func (p *canonProvider) Type() string { return p.typ }
 
-func (p *canonProvider) Index(ctx context.Context, key spec.SkillKey) (spec.SkillRecord, error) {
+func (p *canonProvider) Index(ctx context.Context, def spec.SkillDef) (spec.ProviderSkillIndexRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return spec.ProviderSkillIndexRecord{}, err
+	}
+
+	key := spec.ProviderSkillKey(def)
 	if key.Location == "rel" {
 		key.Location = "abs"
 	}
+
 	if strings.TrimSpace(key.Type) == "" || strings.TrimSpace(key.Name) == "" || strings.TrimSpace(key.Location) == "" {
-		return spec.SkillRecord{}, fmt.Errorf("%w: invalid", spec.ErrInvalidArgument)
+		return spec.ProviderSkillIndexRecord{}, fmt.Errorf("%w: invalid", spec.ErrInvalidArgument)
 	}
-	return spec.SkillRecord{Key: key, Description: "d"}, nil
+
+	return spec.ProviderSkillIndexRecord{Key: key, Description: "d"}, nil
 }
 
-func (p *canonProvider) LoadBody(ctx context.Context, key spec.SkillKey) (string, error) {
+func (p *canonProvider) LoadBody(ctx context.Context, key spec.ProviderSkillKey) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	return "body", nil
 }
 
 func (p *canonProvider) ReadResource(
 	ctx context.Context,
-	key spec.SkillKey,
+	key spec.ProviderSkillKey,
 	resourcePath string,
 	encoding spec.ReadResourceEncoding,
 ) ([]llmtoolsgoSpec.ToolOutputUnion, error) {
@@ -116,7 +135,7 @@ func (p *canonProvider) ReadResource(
 
 func (p *canonProvider) RunScript(
 	ctx context.Context,
-	key spec.SkillKey,
+	key spec.ProviderSkillKey,
 	scriptPath string,
 	args []string,
 	env map[string]string,

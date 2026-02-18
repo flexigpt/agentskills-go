@@ -16,10 +16,10 @@ type ProviderResolver interface {
 }
 
 type Catalog interface {
-	ResolveHandle(h spec.SkillHandle) (spec.SkillKey, bool)
-	HandleForKey(key spec.SkillKey) (spec.SkillHandle, bool)
-	EnsureBody(ctx context.Context, key spec.SkillKey) (string, error)
-	Get(key spec.SkillKey) (spec.SkillRecord, bool)
+	ResolveHandle(h spec.SkillHandle) (spec.ProviderSkillKey, bool)
+	HandleForKey(key spec.ProviderSkillKey) (spec.SkillHandle, bool)
+	EnsureBody(ctx context.Context, key spec.ProviderSkillKey) (string, error)
+	GetIndex(key spec.ProviderSkillKey) (spec.ProviderSkillIndexRecord, bool)
 }
 
 type SessionConfig struct {
@@ -37,8 +37,8 @@ type Session struct {
 	providers ProviderResolver
 
 	maxActive   int
-	activeOrder []spec.SkillKey // Active skills are stored as internal keys; order is activation order.
-	activeSet   map[spec.SkillKey]struct{}
+	activeOrder []spec.ProviderSkillKey // Active skills are stored as internal keys; order is activation order.
+	activeSet   map[spec.ProviderSkillKey]struct{}
 
 	mu           sync.Mutex
 	stateVersion uint64 // stateVersion increments on every mutation; used for optimistic concurrency.
@@ -52,7 +52,7 @@ func newSession(cfg SessionConfig) *Session {
 		catalog:   cfg.Catalog,
 		providers: cfg.Providers,
 		maxActive: cfg.MaxActivePerSession,
-		activeSet: map[spec.SkillKey]struct{}{},
+		activeSet: map[spec.ProviderSkillKey]struct{}{},
 		touch:     cfg.Touch,
 	}
 }
@@ -62,7 +62,7 @@ func (s *Session) ID() string { return s.id }
 // ActiveKeys returns the session's active skill keys in activation order.
 //
 // It also prunes keys that no longer exist in the catalog so callers don't need to handle removed-skills drift.
-func (s *Session) ActiveKeys(ctx context.Context) ([]spec.SkillKey, error) {
+func (s *Session) ActiveKeys(ctx context.Context) ([]spec.ProviderSkillKey, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -73,11 +73,11 @@ func (s *Session) ActiveKeys(ctx context.Context) ([]spec.SkillKey, error) {
 	}
 
 	s.mu.Lock()
-	order := append([]spec.SkillKey(nil), s.activeOrder...)
+	order := append([]spec.ProviderSkillKey(nil), s.activeOrder...)
 	s.mu.Unlock()
 
-	out := make([]spec.SkillKey, 0, len(order))
-	missing := make([]spec.SkillKey, 0)
+	out := make([]spec.ProviderSkillKey, 0, len(order))
+	missing := make([]spec.ProviderSkillKey, 0)
 	for _, k := range order {
 		// If removed from catalog, prune from session.
 		if _, ok := s.catalog.HandleForKey(k); !ok {
@@ -95,7 +95,7 @@ func (s *Session) ActiveKeys(ctx context.Context) ([]spec.SkillKey, error) {
 
 func (s *Session) ActivateKeys(
 	ctx context.Context,
-	keys []spec.SkillKey,
+	keys []spec.ProviderSkillKey,
 	mode spec.LoadMode,
 ) ([]spec.SkillHandle, error) {
 	if err := ctx.Err(); err != nil {
@@ -119,30 +119,17 @@ func (s *Session) ActivateKeys(
 	}
 
 	// Validate keys exist in catalog (and dedupe).
-	// Robustness: if key.Location is not canonical, attempt to canonicalize via provider.Index and
-	// then match against catalog using the normalized key.
-	req := make([]spec.SkillKey, 0, len(keys))
-	seen := map[spec.SkillKey]struct{}{}
+
+	req := make([]spec.ProviderSkillKey, 0, len(keys))
+	seen := map[spec.ProviderSkillKey]struct{}{}
 
 	for _, k := range keys {
 		if _, ok := seen[k]; ok {
 			continue
 		}
 
-		if _, ok := s.catalog.Get(k); !ok {
-			// Try provider-based canonicalization.
-			p, okp := s.providers.Provider(k.Type)
-			if !okp || p == nil {
-				return nil, spec.ErrProviderNotFound
-			}
-			rec, err := p.Index(ctx, k)
-			if err != nil {
-				return nil, fmt.Errorf("%w: unknown skill key: %+v: %w", spec.ErrSkillNotFound, k, err)
-			}
-			k = rec.Key
-			if _, ok2 := s.catalog.Get(k); !ok2 {
-				return nil, fmt.Errorf("%w: unknown skill key: %+v", spec.ErrSkillNotFound, k)
-			}
+		if _, ok := s.catalog.GetIndex(k); !ok {
+			return nil, fmt.Errorf("%w: unknown skill key: %+v", spec.ErrSkillNotFound, k)
 		}
 		seen[k] = struct{}{}
 		req = append(req, k)
@@ -157,16 +144,16 @@ func (s *Session) ActivateKeys(
 		}
 
 		snapVer := s.stateVersion
-		currentOrder := append([]spec.SkillKey(nil), s.activeOrder...)
-		currentSet := make(map[spec.SkillKey]struct{}, len(s.activeSet))
+		currentOrder := append([]spec.ProviderSkillKey(nil), s.activeOrder...)
+		currentSet := make(map[spec.ProviderSkillKey]struct{}, len(s.activeSet))
 		for k := range s.activeSet {
 			currentSet[k] = struct{}{}
 		}
 		s.mu.Unlock()
 
 		// Compute next state without holding lock.
-		nextSet := map[spec.SkillKey]struct{}{}
-		nextOrder := make([]spec.SkillKey, 0, len(currentOrder)+len(req))
+		nextSet := map[spec.ProviderSkillKey]struct{}{}
+		nextOrder := make([]spec.ProviderSkillKey, 0, len(currentOrder)+len(req))
 
 		switch m {
 		case spec.LoadModeReplace:
@@ -176,7 +163,7 @@ func (s *Session) ActivateKeys(
 				nextOrder = append(nextOrder, k)
 			}
 		case spec.LoadModeAdd:
-			reqSet := map[spec.SkillKey]struct{}{}
+			reqSet := map[spec.ProviderSkillKey]struct{}{}
 
 			for _, k := range req {
 				reqSet[k] = struct{}{}
@@ -215,7 +202,7 @@ func (s *Session) ActivateKeys(
 
 		// Re-check existence just before commit (skills could have been removed concurrently).
 		for _, k := range nextOrder {
-			if _, ok := s.catalog.Get(k); !ok {
+			if _, ok := s.catalog.GetIndex(k); !ok {
 				return nil, spec.ErrSkillNotFound
 			}
 		}
@@ -246,13 +233,13 @@ func (s *Session) ActivateKeys(
 
 func (s *Session) activeHandlesLocked() ([]spec.SkillHandle, error) {
 	out := make([]spec.SkillHandle, 0, len(s.activeOrder))
-	var missing map[spec.SkillKey]struct{}
+	var missing map[spec.ProviderSkillKey]struct{}
 
 	for _, k := range s.activeOrder {
 		h, ok := s.catalog.HandleForKey(k)
 		if !ok {
 			if missing == nil {
-				missing = map[spec.SkillKey]struct{}{}
+				missing = map[spec.ProviderSkillKey]struct{}{}
 			}
 			missing[k] = struct{}{}
 			continue
@@ -263,7 +250,7 @@ func (s *Session) activeHandlesLocked() ([]spec.SkillHandle, error) {
 		for k := range missing {
 			delete(s.activeSet, k)
 		}
-		s.activeOrder = slices.DeleteFunc(s.activeOrder, func(v spec.SkillKey) bool {
+		s.activeOrder = slices.DeleteFunc(s.activeOrder, func(v spec.ProviderSkillKey) bool {
 			_, ok := missing[v]
 			return ok
 		})
@@ -272,7 +259,7 @@ func (s *Session) activeHandlesLocked() ([]spec.SkillHandle, error) {
 	return out, nil
 }
 
-func (s *Session) isActiveLocked(k spec.SkillKey) bool { _, ok := s.activeSet[k]; return ok }
+func (s *Session) isActiveLocked(k spec.ProviderSkillKey) bool { _, ok := s.activeSet[k]; return ok }
 
 func (s *Session) touchSession() {
 	if s.touch != nil {
@@ -280,11 +267,11 @@ func (s *Session) touchSession() {
 	}
 }
 
-func (s *Session) pruneKeys(keys []spec.SkillKey) {
+func (s *Session) pruneKeys(keys []spec.ProviderSkillKey) {
 	if len(keys) == 0 {
 		return
 	}
-	rm := make(map[spec.SkillKey]struct{}, len(keys))
+	rm := make(map[spec.ProviderSkillKey]struct{}, len(keys))
 	for _, k := range keys {
 		rm[k] = struct{}{}
 	}
@@ -306,14 +293,14 @@ func (s *Session) pruneKeys(keys []spec.SkillKey) {
 		return
 	}
 
-	s.activeOrder = slices.DeleteFunc(s.activeOrder, func(v spec.SkillKey) bool {
+	s.activeOrder = slices.DeleteFunc(s.activeOrder, func(v spec.ProviderSkillKey) bool {
 		_, ok := rm[v]
 		return ok
 	})
 	s.stateVersion++
 }
 
-func (s *Session) pruneKey(k spec.SkillKey) {
+func (s *Session) pruneKey(k spec.ProviderSkillKey) {
 	if s.closed.Load() {
 		return
 	}
@@ -327,7 +314,7 @@ func (s *Session) pruneKey(k spec.SkillKey) {
 	s.stateVersion++
 
 	// Remove from order slice.
-	s.activeOrder = slices.DeleteFunc(s.activeOrder, func(v spec.SkillKey) bool { return v == k })
+	s.activeOrder = slices.DeleteFunc(s.activeOrder, func(v spec.ProviderSkillKey) bool { return v == k })
 }
 
 func (s *Session) isClosed() bool { return s.closed.Load() }

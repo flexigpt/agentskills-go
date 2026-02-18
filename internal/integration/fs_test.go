@@ -56,18 +56,18 @@ func TestRuntime_FSProvider_EndToEnd(t *testing.T) {
 	}
 
 	// Add skill.
-
 	rec, err := rt.AddSkill(
 		ctx,
-		spec.SkillKey{
-			Type:        fsskillprovider.Type,
-			SkillHandle: spec.SkillHandle{Name: "hello-skill", Location: skillDir},
+		spec.SkillDef{
+			Type:     fsskillprovider.Type,
+			Name:     "hello-skill",
+			Location: skillDir,
 		},
 	)
 	if err != nil {
 		t.Fatalf("add skill: %v", err)
 	}
-	if rec.Key.Location == "" {
+	if rec.Def.Location == "" {
 		t.Fatalf("expected normalized path in record")
 	}
 
@@ -84,7 +84,7 @@ func TestRuntime_FSProvider_EndToEnd(t *testing.T) {
 	}
 
 	// Create session and activate skill (progressive disclosure).
-	sid, handles, err := rt.NewSession(ctx, agentskills.WithSessionActiveKeys([]spec.SkillKey{rec.Key}))
+	sid, handles, err := rt.NewSession(ctx, agentskills.WithSessionActiveSkills([]spec.SkillDef{rec.Def}))
 	if err != nil {
 		t.Fatalf("new session: %v", err)
 	}

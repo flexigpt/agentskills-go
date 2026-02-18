@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"encoding/xml"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -15,6 +16,8 @@ func TestAvailableSkillsXML_SortsAndEscapes(t *testing.T) {
 		{Name: "a", Description: "ok", Location: "/1"},
 	}
 
+	orig := append([]AvailableSkillItem(nil), in...)
+
 	s, err := AvailableSkillsXML(in)
 	if err != nil {
 		t.Fatalf("AvailableSkillsXML: %v", err)
@@ -22,7 +25,11 @@ func TestAvailableSkillsXML_SortsAndEscapes(t *testing.T) {
 	if !strings.Contains(s, "<availableSkills") {
 		t.Fatalf("unexpected xml: %s", s)
 	}
-	t.Log(s)
+
+	// Ensure input slice was not mutated (function sorts a copy).
+	if !reflect.DeepEqual(in, orig) {
+		t.Fatalf("expected input not to be mutated; got=%v want=%v", in, orig)
+	}
 
 	var decoded availableSkills
 	if err := xml.Unmarshal([]byte(s), &decoded); err != nil {
@@ -49,11 +56,32 @@ func TestAvailableSkillsXML_SortsAndEscapes(t *testing.T) {
 	}
 }
 
-func TestActiveSkillsXML_UsesCDATA(t *testing.T) {
+func TestAvailableSkillsXML_Empty(t *testing.T) {
+	t.Parallel()
+
+	s, err := AvailableSkillsXML(nil)
+	if err != nil {
+		t.Fatalf("AvailableSkillsXML: %v", err)
+	}
+	if !strings.Contains(s, "<availableSkills") {
+		t.Fatalf("unexpected xml: %s", s)
+	}
+
+	var decoded availableSkills
+	if err := xml.Unmarshal([]byte(s), &decoded); err != nil {
+		t.Fatalf("xml.Unmarshal: %v", err)
+	}
+	if len(decoded.Skills) != 0 {
+		t.Fatalf("expected 0 skills, got %d", len(decoded.Skills))
+	}
+}
+
+func TestActiveSkillsXML_UsesCDATA_AndPreservesOrder(t *testing.T) {
 	t.Parallel()
 
 	in := []ActiveSkillItem{
-		{Name: "s", Body: "use <tag> & keep raw"},
+		{Name: "s1", Body: "use <tag> & keep raw"},
+		{Name: "s2", Body: "second"},
 	}
 	s, err := ActiveSkillsXML(in)
 	if err != nil {
@@ -71,10 +99,16 @@ func TestActiveSkillsXML_UsesCDATA(t *testing.T) {
 	if err := xml.Unmarshal([]byte(s), &decoded); err != nil {
 		t.Fatalf("xml.Unmarshal: %v", err)
 	}
-	if len(decoded.Skills) != 1 || decoded.Skills[0].Name != "s" {
-		t.Fatalf("unexpected decoded: %+v", decoded)
+	if len(decoded.Skills) != 2 {
+		t.Fatalf("expected 2 skills, got %d", len(decoded.Skills))
 	}
-	if decoded.Skills[0].Body != in[0].Body {
-		t.Fatalf("body mismatch: got=%q want=%q", decoded.Skills[0].Body, in[0].Body)
+	if decoded.Skills[0].Name != "s1" || decoded.Skills[1].Name != "s2" {
+		t.Fatalf("expected order preserved, got: %+v", decoded.Skills)
+	}
+	if decoded.Skills[0].Body != in[0].Body || decoded.Skills[1].Body != in[1].Body {
+		t.Fatalf("body mismatch: got=%q/%q want=%q/%q",
+			decoded.Skills[0].Body, decoded.Skills[1].Body,
+			in[0].Body, in[1].Body,
+		)
 	}
 }

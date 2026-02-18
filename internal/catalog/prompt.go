@@ -6,44 +6,81 @@ import (
 	"github.com/flexigpt/agentskills-go/spec"
 )
 
-// Filter is used for listing/prompting skills.
-type Filter struct {
+// PromptFilter is used for LLM prompt listing.
+type PromptFilter struct {
 	Types          []string
-	NamePrefix     string
+	LLMNamePrefix  string
 	LocationPrefix string
-	// AllowKeys restricts to an explicit allowlist of skill keys. Empty means "all".
-	AllowKeys []spec.SkillKey
+
+	// AllowDefs restricts to an explicit allowlist of host/lifecycle definitions. Empty means "all".
+	AllowDefs []spec.SkillDef
 }
 
-func (f Filter) match(e *entry) bool {
+func (f PromptFilter) match(e *entry) bool {
 	if e == nil {
 		return false
 	}
-	if len(f.AllowKeys) > 0 && !slices.Contains(f.AllowKeys, e.rec.Key) {
+	if len(f.AllowDefs) > 0 && !slices.Contains(f.AllowDefs, e.def) {
 		return false
 	}
 
 	if len(f.Types) > 0 {
-		ok := slices.Contains(f.Types, e.rec.Key.Type)
+		ok := slices.Contains(f.Types, e.idx.Key.Type)
+
 		if !ok {
 			return false
 		}
 	}
-	if f.NamePrefix != "" && len(e.llmName) >= len(f.NamePrefix) {
-		if e.llmName[:len(f.NamePrefix)] != f.NamePrefix {
+	if f.LLMNamePrefix != "" && len(e.llmName) >= len(f.LLMNamePrefix) {
+		if e.llmName[:len(f.LLMNamePrefix)] != f.LLMNamePrefix {
 			return false
 		}
-	} else if f.NamePrefix != "" {
+	} else if f.LLMNamePrefix != "" {
 		return false
 	}
 
-	if f.LocationPrefix != "" && len(e.rec.Key.Location) >= len(f.LocationPrefix) {
-		if e.rec.Key.Location[:len(f.LocationPrefix)] != f.LocationPrefix {
+	if f.LocationPrefix != "" && len(e.def.Location) >= len(f.LocationPrefix) {
+		if e.def.Location[:len(f.LocationPrefix)] != f.LocationPrefix {
 			return false
 		}
 	} else if f.LocationPrefix != "" {
 		return false
 	}
 
+	return true
+}
+
+// UserFilter is used for host/lifecycle listing.
+type UserFilter struct {
+	Types          []string
+	NamePrefix     string
+	LocationPrefix string
+	AllowDefs      []spec.SkillDef
+}
+
+func (f UserFilter) match(e *entry) bool {
+	if e == nil {
+		return false
+	}
+	if len(f.AllowDefs) > 0 && !slices.Contains(f.AllowDefs, e.def) {
+		return false
+	}
+	if len(f.Types) > 0 && !slices.Contains(f.Types, e.idx.Key.Type) {
+		return false
+	}
+	if f.NamePrefix != "" && len(e.def.Name) >= len(f.NamePrefix) {
+		if e.def.Name[:len(f.NamePrefix)] != f.NamePrefix {
+			return false
+		}
+	} else if f.NamePrefix != "" {
+		return false
+	}
+	if f.LocationPrefix != "" && len(e.def.Location) >= len(f.LocationPrefix) {
+		if e.def.Location[:len(f.LocationPrefix)] != f.LocationPrefix {
+			return false
+		}
+	} else if f.LocationPrefix != "" {
+		return false
+	}
 	return true
 }

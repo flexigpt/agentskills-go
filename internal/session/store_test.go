@@ -37,6 +37,37 @@ func TestStore_TTLEviction(t *testing.T) {
 	}
 }
 
+func TestStore_TTLTouchExtendsLifetime(t *testing.T) {
+	t.Parallel()
+
+	cat := newMemCatalog()
+	ttl := 80 * time.Millisecond
+
+	st := NewStore(StoreConfig{
+		TTL:                 ttl,
+		MaxSessions:         100,
+		MaxActivePerSession: 8,
+		Catalog:             cat,
+		Providers:           mapResolver{},
+	})
+
+	id, _, err := st.NewSession(t.Context(), NewSessionParams{})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	if _, ok := st.Get(id); !ok {
+		t.Fatalf("expected session to exist before touch")
+	}
+
+	// Touch happened via Get(). Sleep less than ttl since touch.
+	time.Sleep(50 * time.Millisecond)
+	if _, ok := st.Get(id); !ok {
+		t.Fatalf("expected session to still exist due to touch extending TTL")
+	}
+}
+
 func TestStore_MaxSessionsAndLRU(t *testing.T) {
 	t.Parallel()
 
@@ -83,7 +114,7 @@ func TestStore_PruneSkill(t *testing.T) {
 	t.Parallel()
 
 	cat := newMemCatalog()
-	k := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "p1"}}
+	k := spec.ProviderSkillKey{Type: "t", Name: "a", Location: "p1"}
 	cat.add(k, "ok")
 
 	st := NewStore(StoreConfig{
@@ -103,7 +134,7 @@ func TestStore_PruneSkill(t *testing.T) {
 		t.Fatalf("Get: missing session")
 	}
 
-	_, err = s.ActivateKeys(t.Context(), []spec.SkillKey{k}, spec.LoadModeReplace)
+	_, err = s.ActivateKeys(t.Context(), []spec.ProviderSkillKey{k}, spec.LoadModeReplace)
 	if err != nil {
 		t.Fatalf("ActivateKeys: %v", err)
 	}
@@ -124,7 +155,7 @@ func TestStore_NewSession_InitialActiveKeys_Activated(t *testing.T) {
 	t.Cleanup(cancel)
 
 	cat := newMemCatalog()
-	k := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "p1"}}
+	k := spec.ProviderSkillKey{Type: "t", Name: "a", Location: "p1"}
 	cat.add(k, "ok")
 
 	st := NewStore(StoreConfig{
@@ -135,7 +166,7 @@ func TestStore_NewSession_InitialActiveKeys_Activated(t *testing.T) {
 		Providers:           mapResolver{"t": &canonProvider{typ: "t"}},
 	})
 
-	id, active, err := st.NewSession(ctx, NewSessionParams{ActiveKeys: []spec.SkillKey{k}})
+	id, active, err := st.NewSession(ctx, NewSessionParams{ActiveKeys: []spec.ProviderSkillKey{k}})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -173,10 +204,9 @@ func TestStore_NewSession_InitialActiveKeys_ErrorDeletesSession(t *testing.T) {
 	})
 
 	_, _, err := st.NewSession(ctx, NewSessionParams{
-		ActiveKeys: []spec.SkillKey{{
-			Type:        "t",
-			SkillHandle: spec.SkillHandle{Name: "missing", Location: "p1"},
-		}},
+		ActiveKeys: []spec.ProviderSkillKey{
+			{Type: "t", Name: "missing", Location: "p1"},
+		},
 	})
 	if !errors.Is(err, spec.ErrSkillNotFound) {
 		t.Fatalf("expected ErrSkillNotFound, got %v", err)
@@ -197,8 +227,8 @@ func TestStore_NewSession_MaxActiveOverride_AppliesPerSession(t *testing.T) {
 	t.Cleanup(cancel)
 
 	cat := newMemCatalog()
-	k1 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "a", Location: "p1"}}
-	k2 := spec.SkillKey{Type: "t", SkillHandle: spec.SkillHandle{Name: "b", Location: "p2"}}
+	k1 := spec.ProviderSkillKey{Type: "t", Name: "a", Location: "p1"}
+	k2 := spec.ProviderSkillKey{Type: "t", Name: "b", Location: "p2"}
 	cat.add(k1, "ok")
 	cat.add(k2, "ok")
 
@@ -212,7 +242,7 @@ func TestStore_NewSession_MaxActiveOverride_AppliesPerSession(t *testing.T) {
 
 	id, active, err := st.NewSession(ctx, NewSessionParams{
 		MaxActivePerSession: 2,
-		ActiveKeys:          []spec.SkillKey{k1, k2},
+		ActiveKeys:          []spec.ProviderSkillKey{k1, k2},
 	})
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -222,5 +252,77 @@ func TestStore_NewSession_MaxActiveOverride_AppliesPerSession(t *testing.T) {
 	}
 	if _, ok := st.Get(id); !ok {
 		t.Fatalf("expected session exists")
+	}
+}
+
+func TestStore_NewSession_ContextValidation(t *testing.T) {
+	t.Parallel()
+
+	cat := newMemCatalog()
+	st := NewStore(StoreConfig{
+		TTL:                 10 * time.Second,
+		MaxSessions:         100,
+		MaxActivePerSession: 8,
+		Catalog:             cat,
+		Providers:           mapResolver{},
+	})
+
+	cases := []struct {
+		name  string
+		ctx   context.Context
+		isErr func(error) bool
+	}{
+		{
+			name: "nil_context",
+			ctx:  nil,
+			isErr: func(err error) bool {
+				return errors.Is(err, spec.ErrInvalidArgument)
+			},
+		},
+		{
+			name: "canceled_context",
+			ctx: func() context.Context {
+				ctx, cancel := context.WithCancel(t.Context())
+				cancel()
+				return ctx
+			}(),
+			isErr: func(err error) bool {
+				return errors.Is(err, context.Canceled)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, _, err := st.NewSession(tc.ctx, NewSessionParams{})
+			if err == nil || !tc.isErr(err) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestStore_DeleteClosesSession(t *testing.T) {
+	t.Parallel()
+
+	cat := newMemCatalog()
+	st := NewStore(StoreConfig{
+		TTL:                 10 * time.Second,
+		MaxSessions:         100,
+		MaxActivePerSession: 8,
+		Catalog:             cat,
+		Providers:           mapResolver{},
+	})
+
+	id, _, err := st.NewSession(t.Context(), NewSessionParams{})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	st.Delete(id)
+
+	if _, ok := st.Get(id); ok {
+		t.Fatalf("expected session to be deleted")
 	}
 }

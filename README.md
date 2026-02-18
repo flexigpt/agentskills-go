@@ -54,9 +54,9 @@
 - Add a skill to the catalog
 
   ```go
-  rec, err := rt.AddSkill(ctx, spec.SkillKey{
-    Type: "fs",
-    Name: "hello-skill",
+  rec, err := rt.AddSkill(ctx, spec.SkillDef{
+    Type:     "fs",
+    Name:     "hello-skill",
     // This is base dir containing SKILL.md for "hello-skill".
     // Typically, base dir name and skill name should match.
     Location: "/abs/path/to/hello-skill",
@@ -78,10 +78,10 @@
 
   ```go
   sid, active, err := rt.NewSession(ctx,
-    agentskills.WithSessionActiveKeys([]spec.SkillKey{rec.Key}),
+    agentskills.WithSessionActiveSkills([]spec.SkillDef{rec.Def}),
   )
   _ = sid
-  _ = active // []spec.SkillHandle
+  _ = active // []spec.SkillDef
   _ = err
   ```
 

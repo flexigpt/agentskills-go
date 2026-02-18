@@ -18,7 +18,12 @@ type ProviderResolver interface {
 }
 
 type entry struct {
-	rec        spec.SkillRecord
+	// Host/lifecycle definition (exact user input).
+	def spec.SkillDef
+
+	// Internal/provider-canonicalized record.
+	idx spec.ProviderSkillIndexRecord
+
 	bodyLoaded bool
 	llmName    string
 
@@ -38,85 +43,131 @@ type Catalog struct {
 
 	providers ProviderResolver
 
-	byKey       map[spec.SkillKey]*entry
-	handleIndex map[handleKey]spec.SkillKey
+	// ByKey is keyed by INTERNAL canonical key.
+	byKey map[spec.ProviderSkillKey]*entry
+
+	// ByDef maps EXACT user-provided defs to the canonical internal key.
+	byDef map[spec.SkillDef]spec.ProviderSkillKey
+
+	// HandleIndex maps LLM-facing handles (computed name + user location) to canonical internal keys.
+	handleIndex map[handleKey]spec.ProviderSkillKey
 }
 
 func New(providers ProviderResolver) *Catalog {
 	return &Catalog{
 		providers:   providers,
-		byKey:       map[spec.SkillKey]*entry{},
-		handleIndex: map[handleKey]spec.SkillKey{},
+		byKey:       map[spec.ProviderSkillKey]*entry{},
+		byDef:       map[spec.SkillDef]spec.ProviderSkillKey{},
+		handleIndex: map[handleKey]spec.ProviderSkillKey{},
 	}
 }
 
-func (c *Catalog) Add(ctx context.Context, key spec.SkillKey) (spec.SkillRecord, error) {
+// Add registers a skill by its host/lifecycle definition (user input).
+// It stores provider-canonicalized identity internally, but returns only the original def to callers.
+func (c *Catalog) Add(ctx context.Context, def spec.SkillDef) (spec.SkillRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return spec.SkillRecord{}, err
 	}
 
-	if strings.TrimSpace(key.Type) == "" || strings.TrimSpace(key.Name) == "" || strings.TrimSpace(key.Location) == "" {
+	if strings.TrimSpace(def.Type) == "" || strings.TrimSpace(def.Name) == "" || strings.TrimSpace(def.Location) == "" {
 		return spec.SkillRecord{}, fmt.Errorf(
-			"%w: key.type, key.name, and key.location are required",
+			"%w: def.type, def.name, and def.location are required",
 			spec.ErrInvalidArgument,
 		)
 	}
 
-	p, ok := c.providers.Provider(key.Type)
+	p, ok := c.providers.Provider(def.Type)
 	if !ok || p == nil {
 		return spec.SkillRecord{}, errors.Join(
 			spec.ErrProviderNotFound,
-			fmt.Errorf("unknown provider type: %q", key.Type),
+			fmt.Errorf("unknown provider type: %q", def.Type),
 		)
 	}
 
-	rec, err := p.Index(ctx, key)
+	idx, err := p.Index(ctx, def)
 	if err != nil {
 		return spec.SkillRecord{}, err
 	}
 
-	// Provider is allowed to normalize Location, but must not change Type/Name identity.
-	if rec.Key.Type != key.Type {
-		return spec.SkillRecord{}, fmt.Errorf("%w: provider changed key.type from %q to %q",
-			spec.ErrInvalidArgument, key.Type, rec.Key.Type)
+	// Provider is allowed to canonicalize Location, but must not change Type/Name identity.
+	if idx.Key.Type != def.Type {
+		return spec.SkillRecord{}, fmt.Errorf(
+			"%w: provider changed type from %q to %q",
+			spec.ErrInvalidArgument,
+			def.Type,
+			idx.Key.Type,
+		)
 	}
-	if rec.Key.Name != key.Name {
-		return spec.SkillRecord{}, fmt.Errorf("%w: provider changed key.name from %q to %q",
-			spec.ErrInvalidArgument, key.Name, rec.Key.Name)
+	if idx.Key.Name != def.Name {
+		return spec.SkillRecord{}, fmt.Errorf(
+			"%w: provider changed name from %q to %q",
+			spec.ErrInvalidArgument,
+			def.Name,
+			idx.Key.Name,
+		)
 	}
 
-	if strings.TrimSpace(rec.Key.Type) == "" || strings.TrimSpace(rec.Key.Name) == "" ||
-		strings.TrimSpace(rec.Key.Location) == "" {
+	if strings.TrimSpace(idx.Key.Type) == "" ||
+		strings.TrimSpace(idx.Key.Name) == "" ||
+		strings.TrimSpace(idx.Key.Location) == "" {
 		return spec.SkillRecord{}, fmt.Errorf("%w: provider returned invalid record key", spec.ErrInvalidArgument)
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if _, exists := c.byKey[rec.Key]; exists {
+	if _, exists := c.byKey[idx.Key]; exists {
+		return spec.SkillRecord{}, spec.ErrSkillAlreadyExists
+	}
+	if _, exists := c.byDef[def]; exists {
+		// Same exact user def already registered.
 		return spec.SkillRecord{}, spec.ErrSkillAlreadyExists
 	}
 
-	e := &entry{rec: rec}
-	// If a provider pre-populates SkillMDBody we treat it as already loaded
+	e := &entry{def: def, idx: idx}
+
+	// If a provider pre-populates SkillBody we treat it as already loaded
 	// only when non-empty. (With the current data model, empty-but-loaded
 	// cannot be distinguished from not-yet-loaded.)
-	e.bodyLoaded = rec.SkillBody != ""
-	c.byKey[rec.Key] = e
+	e.bodyLoaded = idx.SkillBody != ""
+
+	c.byKey[idx.Key] = e
+	c.byDef[def] = idx.Key
 
 	c.recomputeLLMNamesLocked()
 
-	return e.rec, nil
+	return spec.SkillRecord{
+		Def:         def,
+		Description: idx.Description,
+		Properties:  idx.Properties,
+		Digest:      idx.Digest,
+	}, nil
 }
 
-func (c *Catalog) Remove(key spec.SkillKey) (spec.SkillRecord, bool) {
+// ResolveDef resolves an EXACT user-provided skill def (as originally added) to the internal canonical key.
+func (c *Catalog) ResolveDef(def spec.SkillDef) (spec.ProviderSkillKey, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	k, ok := c.byDef[def]
+	return k, ok
+}
+
+// Remove removes a skill by its EXACT host/lifecycle definition.
+// Returns the host-facing record, the canonical internal key, and ok=false if not found.
+func (c *Catalog) Remove(def spec.SkillDef) (spec.SkillRecord, spec.ProviderSkillKey, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	e, ok := c.byKey[key]
-
+	canon, ok := c.byDef[def]
 	if !ok {
-		return spec.SkillRecord{}, false
+		return spec.SkillRecord{}, spec.ProviderSkillKey{}, false
+	}
+
+	e, ok := c.byKey[canon]
+	if !ok || e == nil {
+		// Repair drift.
+		delete(c.byDef, def)
+		return spec.SkillRecord{}, spec.ProviderSkillKey{}, false
 	}
 
 	// Wake any waiters to avoid deadlocks if Remove races EnsureBody.
@@ -125,50 +176,57 @@ func (c *Catalog) Remove(key spec.SkillKey) (spec.SkillRecord, bool) {
 		close(ch)
 	}
 
-	rec := e.rec
-	delete(c.byKey, key)
+	rec := spec.SkillRecord{
+		Def:         e.def,
+		Description: e.idx.Description,
+		Properties:  e.idx.Properties,
+		Digest:      e.idx.Digest,
+	}
+
+	delete(c.byKey, canon)
+	delete(c.byDef, e.def)
 
 	c.recomputeLLMNamesLocked()
-	return rec, true
+	return rec, canon, true
 }
 
-func (c *Catalog) Get(key spec.SkillKey) (spec.SkillRecord, bool) {
+func (c *Catalog) GetIndex(key spec.ProviderSkillKey) (spec.ProviderSkillIndexRecord, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	e, ok := c.byKey[key]
-
 	if !ok {
-		return spec.SkillRecord{}, false
+		return spec.ProviderSkillIndexRecord{}, false
 	}
-	return e.rec, true
+	return e.idx, true
 }
 
-func (c *Catalog) ResolveHandle(h spec.SkillHandle) (spec.SkillKey, bool) {
+func (c *Catalog) ResolveHandle(h spec.SkillHandle) (spec.ProviderSkillKey, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	k, ok := c.handleIndex[normHandle(h)]
-
 	return k, ok
 }
 
-func (c *Catalog) HandleForKey(key spec.SkillKey) (spec.SkillHandle, bool) {
+func (c *Catalog) HandleForKey(key spec.ProviderSkillKey) (spec.SkillHandle, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	e, ok := c.byKey[key]
-
 	if !ok {
 		return spec.SkillHandle{}, false
 	}
-	return spec.SkillHandle{Name: e.llmName, Location: e.rec.Key.Location}, true
+
+	// IMPORTANT: Location returned to LLM is the user-provided location (no canonicalization leakage).
+	return spec.SkillHandle{Name: e.llmName, Location: e.def.Location}, true
 }
 
-func (c *Catalog) EnsureBody(ctx context.Context, key spec.SkillKey) (string, error) {
+func (c *Catalog) EnsureBody(ctx context.Context, key spec.ProviderSkillKey) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+
 	for range 5 {
 		if err := ctx.Err(); err != nil {
 			return "", err
@@ -181,7 +239,7 @@ func (c *Catalog) EnsureBody(ctx context.Context, key spec.SkillKey) (string, er
 			return "", spec.ErrSkillNotFound
 		}
 		if e.bodyLoaded {
-			body := e.rec.SkillBody
+			body := e.idx.SkillBody
 			c.mu.Unlock()
 			return body, nil
 		}
@@ -205,8 +263,9 @@ func (c *Catalog) EnsureBody(ctx context.Context, key spec.SkillKey) (string, er
 		// Become the loader.
 		ch := make(chan struct{})
 		e.bodyWait = ch
-		recKey := e.rec.Key
+		recKey := e.idx.Key
 		c.mu.Unlock()
+
 		p, ok := c.providers.Provider(recKey.Type)
 		if !ok || p == nil {
 			c.finishBodyLoad(key, ch, "", spec.ErrProviderNotFound)
@@ -220,19 +279,21 @@ func (c *Catalog) EnsureBody(ctx context.Context, key spec.SkillKey) (string, er
 		}
 		return body, nil
 	}
+
 	return "", errors.New("could not ensure skill body")
 }
 
-func (c *Catalog) ListRecords(f Filter) []spec.SkillRecord {
+// ListPromptIndexRecords lists INTERNAL records for prompt assembly (returns canonical keys).
+func (c *Catalog) ListPromptIndexRecords(f PromptFilter) []spec.ProviderSkillIndexRecord {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	out := make([]spec.SkillRecord, 0, len(c.byKey))
+	out := make([]spec.ProviderSkillIndexRecord, 0, len(c.byKey))
 	for _, e := range c.byKey {
 		if !f.match(e) {
 			continue
 		}
-		out = append(out, e.rec)
+		out = append(out, e.idx)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Key.Name == out[j].Key.Name {
@@ -243,11 +304,45 @@ func (c *Catalog) ListRecords(f Filter) []spec.SkillRecord {
 	return out
 }
 
+type UserEntry struct {
+	Key    spec.ProviderSkillKey // canonical/internal key
+	Record spec.SkillRecord      // host-facing record (user def)
+}
+
+// ListUserEntries lists host-facing records, while preserving the canonical key for internal consumers.
+func (c *Catalog) ListUserEntries(f UserFilter) []UserEntry {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	out := make([]UserEntry, 0, len(c.byKey))
+	for k, e := range c.byKey {
+		if !f.match(e) {
+			continue
+		}
+		out = append(out, UserEntry{
+			Key: k,
+			Record: spec.SkillRecord{
+				Def:         e.def,
+				Description: e.idx.Description,
+				Properties:  e.idx.Properties,
+				Digest:      e.idx.Digest,
+			},
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Record.Def.Name == out[j].Record.Def.Name {
+			return out[i].Record.Def.Location < out[j].Record.Def.Location
+		}
+		return out[i].Record.Def.Name < out[j].Record.Def.Name
+	})
+	return out
+}
+
 // Conflict handling / name computation.
-// Rule: LLM sees (name + location). Normally "name" is key.Name.
-// Only when there is a collision on (Name, Location) across different providers,
-// we use "<type>:<name>" for all in that collision group.
-// If collision still exists, append "#<shortHash>".
+// Rule: LLM sees (name + location). Normally "name" is idx.Key.Name.
+// Only when there is a collision on (Name, Location), we disambiguate WITHOUT leaking provider type:
+//
+//	"<name>#<shortHash>"
 func (c *Catalog) recomputeLLMNamesLocked() {
 	// Base groups by (Name, Location) (no type).
 	type groupKey struct {
@@ -256,43 +351,41 @@ func (c *Catalog) recomputeLLMNamesLocked() {
 	}
 	groups := map[groupKey][]*entry{}
 	for _, e := range c.byKey {
-		gk := groupKey{Name: e.rec.Key.Name, Location: e.rec.Key.Location}
+		gk := groupKey{Name: e.idx.Key.Name, Location: e.def.Location}
 		groups[gk] = append(groups[gk], e)
 	}
 
-	// First pass: default or type-prefixed within collision groups.
+	// First pass: default or opaque-hash suffix within collision groups.
 	for _, grp := range groups {
 		if len(grp) == 1 {
-			grp[0].llmName = grp[0].rec.Key.Name
+			grp[0].llmName = grp[0].idx.Key.Name
 			continue
 		}
-		// Collision group on (Name, Location): disambiguate by type for *all* in group.
 		for _, e := range grp {
-			e.llmName = e.rec.Key.Type + ":" + e.rec.Key.Name
+			e.llmName = fmt.Sprintf("%s#%s", e.idx.Key.Name, shortHash(e.idx.Key))
 		}
 	}
 
 	// Second pass: ensure uniqueness on (llmName, location).
 	count := map[string]int{}
 	for _, e := range c.byKey {
-		count[e.llmName+"\x00"+e.rec.Key.Location]++
+		count[e.llmName+"\x00"+e.def.Location]++
 	}
 	for _, e := range c.byKey {
-		k := e.llmName + "\x00" + e.rec.Key.Location
-
+		k := e.llmName + "\x00" + e.def.Location
 		if count[k] > 1 {
-			e.llmName = fmt.Sprintf("%s:%s#%s", e.rec.Key.Type, e.rec.Key.Name, shortHash(e.rec.Key))
+			e.llmName = fmt.Sprintf("%s#%s", e.idx.Key.Name, shortHash(e.idx.Key))
 		}
 	}
 
 	// Rebuild handle index.
-	c.handleIndex = map[handleKey]spec.SkillKey{}
+	c.handleIndex = map[handleKey]spec.ProviderSkillKey{}
 	for _, e := range c.byKey {
-		c.handleIndex[handleKey{Name: e.llmName, Location: e.rec.Key.Location}] = e.rec.Key
+		c.handleIndex[handleKey{Name: e.llmName, Location: e.def.Location}] = e.idx.Key
 	}
 }
 
-func (c *Catalog) finishBodyLoad(key spec.SkillKey, ch chan struct{}, body string, err error) {
+func (c *Catalog) finishBodyLoad(key spec.ProviderSkillKey, ch chan struct{}, body string, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.byKey[key]
@@ -317,7 +410,7 @@ func (c *Catalog) finishBodyLoad(key spec.SkillKey, ch chan struct{}, body strin
 		return
 	}
 
-	e.rec.SkillBody = body
+	e.idx.SkillBody = body
 	e.bodyLoaded = true
 	e.bodyErr = nil
 }
@@ -329,7 +422,7 @@ func normHandle(h spec.SkillHandle) handleKey {
 	}
 }
 
-func shortHash(k spec.SkillKey) string {
+func shortHash(k spec.ProviderSkillKey) string {
 	sum := sha256.Sum256([]byte(k.Type + "\x00" + k.Name + "\x00" + k.Location))
 	return hex.EncodeToString(sum[:])[:8]
 }

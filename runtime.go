@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/flexigpt/llmtools-go"
@@ -179,7 +180,12 @@ func (r *Runtime) ProviderTypes() []string {
 }
 
 // AddSkill indexes and registers a skill into the runtime-owned catalog.
-func (r *Runtime) AddSkill(ctx context.Context, key spec.SkillKey) (spec.SkillRecord, error) {
+//
+// IMPORTANT CONTRACT:
+//   - This is a HOST/LIFECYCLE API.
+//   - It accepts and returns only the user-provided skill definition (spec.SkillDef).
+//   - Provider canonicalization/cleanup is internal only and MUST NOT be exposed via this API.
+func (r *Runtime) AddSkill(ctx context.Context, def spec.SkillDef) (spec.SkillRecord, error) {
 	if ctx == nil {
 		return spec.SkillRecord{}, fmt.Errorf("%w: nil context", spec.ErrInvalidArgument)
 	}
@@ -189,11 +195,27 @@ func (r *Runtime) AddSkill(ctx context.Context, key spec.SkillKey) (spec.SkillRe
 	if r == nil {
 		return spec.SkillRecord{}, fmt.Errorf("%w: nil runtime receiver", spec.ErrInvalidArgument)
 	}
-	return r.catalog.Add(ctx, key)
+
+	// Enforce "no cleanup is user-facing": do not silently trim.
+	if strings.TrimSpace(def.Type) != def.Type ||
+		strings.TrimSpace(def.Name) != def.Name ||
+		strings.TrimSpace(def.Location) != def.Location {
+		return spec.SkillRecord{}, fmt.Errorf(
+			"%w: def fields must not contain leading/trailing whitespace",
+			spec.ErrInvalidArgument,
+		)
+	}
+
+	return r.catalog.Add(ctx, def)
 }
 
 // RemoveSkill removes a skill from the catalog (and prunes it from all sessions).
-func (r *Runtime) RemoveSkill(ctx context.Context, key spec.SkillKey) (spec.SkillRecord, error) {
+//
+// IMPORTANT CONTRACT:
+//   - This is a HOST/LIFECYCLE API.
+//   - Removal is by the exact user-provided definition that was added.
+//   - No canonicalization-based matching is performed (to avoid internal cleanup becoming user-facing).
+func (r *Runtime) RemoveSkill(ctx context.Context, def spec.SkillDef) (spec.SkillRecord, error) {
 	if ctx == nil {
 		return spec.SkillRecord{}, fmt.Errorf("%w: nil context", spec.ErrInvalidArgument)
 	}
@@ -203,15 +225,32 @@ func (r *Runtime) RemoveSkill(ctx context.Context, key spec.SkillKey) (spec.Skil
 	if r == nil {
 		return spec.SkillRecord{}, fmt.Errorf("%w: nil runtime receiver", spec.ErrInvalidArgument)
 	}
-	rec, ok := r.catalog.Remove(key)
+
+	if strings.TrimSpace(def.Type) != def.Type ||
+		strings.TrimSpace(def.Name) != def.Name ||
+		strings.TrimSpace(def.Location) != def.Location {
+		return spec.SkillRecord{}, fmt.Errorf(
+			"%w: def fields must not contain leading/trailing whitespace",
+			spec.ErrInvalidArgument,
+		)
+	}
+
+	rec, canonKey, ok := r.catalog.Remove(def)
 	if !ok {
 		return spec.SkillRecord{}, spec.ErrSkillNotFound
 	}
-	r.sessions.PruneSkill(key)
+
+	// Prune using canonical/internal key.
+	r.sessions.PruneSkill(canonKey)
 	return rec, nil
 }
 
-func (r *Runtime) ListSkills(ctx context.Context, filter *SkillFilter) ([]spec.SkillRecord, error) {
+// ListSkills lists skills for HOST/LIFECYCLE usage.
+//
+// IMPORTANT CONTRACT:
+//   - Returns only user-provided skill definitions in SkillRecord.Def.
+//   - Filters (NamePrefix/LocationPrefix) apply to user-provided Def fields (not LLM-facing names).
+func (r *Runtime) ListSkills(ctx context.Context, filter *SkillListFilter) ([]spec.SkillRecord, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("%w: nil context", spec.ErrInvalidArgument)
 	}
@@ -222,7 +261,7 @@ func (r *Runtime) ListSkills(ctx context.Context, filter *SkillFilter) ([]spec.S
 		return nil, fmt.Errorf("%w: nil runtime receiver", spec.ErrInvalidArgument)
 	}
 
-	cfg := normalizeSkillsPromptFilter(filter)
+	cfg := normalizeSkillListFilter(filter)
 
 	// Validate activity/session constraints early.
 	switch cfg.Activity {
@@ -236,11 +275,15 @@ func (r *Runtime) ListSkills(ctx context.Context, filter *SkillFilter) ([]spec.S
 		return nil, fmt.Errorf("%w: invalid activity %q", spec.ErrInvalidArgument, cfg.Activity)
 	}
 
-	records := r.catalog.ListRecords(toCatalogFilter(&cfg))
+	entries := r.catalog.ListUserEntries(toCatalogUserFilter(&cfg))
 
 	// No session => no active skills exist; "inactive" behaves like "all".
 	if cfg.SessionID == "" {
-		return records, nil
+		out := make([]spec.SkillRecord, 0, len(entries))
+		for _, e := range entries {
+			out = append(out, e.Record)
+		}
+		return out, nil
 	}
 
 	// Session-scoped filtering.
@@ -252,29 +295,33 @@ func (r *Runtime) ListSkills(ctx context.Context, filter *SkillFilter) ([]spec.S
 	if err != nil {
 		return nil, err
 	}
-	activeSet := make(map[spec.SkillKey]struct{}, len(keys))
+	activeSet := make(map[spec.ProviderSkillKey]struct{}, len(keys))
 	for _, k := range keys {
 		activeSet[k] = struct{}{}
 	}
 
 	if cfg.Activity == SkillActivityAny {
-		return records, nil
+		out := make([]spec.SkillRecord, 0, len(entries))
+		for _, e := range entries {
+			out = append(out, e.Record)
+		}
+		return out, nil
 	}
 
-	out := make([]spec.SkillRecord, 0, len(records))
-	for _, rec := range records {
-		_, isActive := activeSet[rec.Key]
+	out := make([]spec.SkillRecord, 0, len(entries))
+	for _, e := range entries {
+		_, isActive := activeSet[e.Key]
 		switch cfg.Activity {
 		case SkillActivityActive:
 			if isActive {
-				out = append(out, rec)
+				out = append(out, e.Record)
 			}
 		case SkillActivityInactive:
 			if !isActive {
-				out = append(out, rec)
+				out = append(out, e.Record)
 			}
 		default:
-			// We filtered Any records above.
+			// Any already handled.
 		}
 	}
 	return out, nil
@@ -284,8 +331,8 @@ type newSessionOptions struct {
 	// If >0 overrides runtime/store default.
 	maxActivePerSession int
 
-	// Optional initial active set.
-	activeKeys []spec.SkillKey
+	// Optional initial active set (HOST/LIFECYCLE definitions).
+	activeDefs []spec.SkillDef
 }
 
 // SessionOption configures Runtime.NewSession.
@@ -300,19 +347,22 @@ func WithSessionMaxActivePerSession(n int) SessionOption {
 	}
 }
 
-// WithSessionActiveKeys sets the initial active skill keys for the new session.
-// These are activated during session creation (no post-creation host activation API).
-func WithSessionActiveKeys(keys []spec.SkillKey) SessionOption {
-	snap := append([]spec.SkillKey(nil), keys...)
+// WithSessionActiveSkills sets the initial active skills for the new session (host/lifecycle defs).
+// These are activated during session creation.
+func WithSessionActiveSkills(defs []spec.SkillDef) SessionOption {
+	snap := append([]spec.SkillDef(nil), defs...)
 	return func(o *newSessionOptions) error {
-		o.activeKeys = snap
+		o.activeDefs = snap
 		return nil
 	}
 }
 
-// NewSession creates a new session. Session configuration (including an initial active set)
-// must be provided via SessionOption(s).
-func (r *Runtime) NewSession(ctx context.Context, opts ...SessionOption) (spec.SessionID, []spec.SkillHandle, error) {
+// NewSession creates a new session.
+//
+// IMPORTANT CONTRACT:
+//   - This is a HOST/LIFECYCLE API.
+//   - It accepts and returns skill definitions (spec.SkillDef), never LLM handles.
+func (r *Runtime) NewSession(ctx context.Context, opts ...SessionOption) (spec.SessionID, []spec.SkillDef, error) {
 	if ctx == nil {
 		return "", nil, fmt.Errorf("%w: nil context", spec.ErrInvalidArgument)
 	}
@@ -334,15 +384,38 @@ func (r *Runtime) NewSession(ctx context.Context, opts ...SessionOption) (spec.S
 		}
 	}
 
-	id, active, err := r.sessions.NewSession(ctx, session.NewSessionParams{
+	// Resolve host defs -> canonical/internal keys (in order), without exposing canonicalization.
+	var activeKeys []spec.ProviderSkillKey
+	if len(cfg.activeDefs) > 0 {
+		seen := map[spec.SkillDef]struct{}{}
+		activeKeys = make([]spec.ProviderSkillKey, 0, len(cfg.activeDefs))
+		for _, d := range cfg.activeDefs {
+			if _, dup := seen[d]; dup {
+				return "", nil, fmt.Errorf("%w: duplicate active skill def: %+v", spec.ErrInvalidArgument, d)
+			}
+			seen[d] = struct{}{}
+
+			k, ok := r.catalog.ResolveDef(d)
+			if !ok {
+				return "", nil, fmt.Errorf("%w: unknown skill def: %+v", spec.ErrSkillNotFound, d)
+			}
+			activeKeys = append(activeKeys, k)
+		}
+	}
+
+	id, _, err := r.sessions.NewSession(ctx, session.NewSessionParams{
 		MaxActivePerSession: cfg.maxActivePerSession,
-		ActiveKeys:          cfg.activeKeys,
+		ActiveKeys:          activeKeys,
 	})
 	if err != nil {
 		return "", nil, err
 	}
 
-	return spec.SessionID(id), active, nil
+	// Return exactly what the host provided (no computed handles / no canonicalization leakage).
+	if len(cfg.activeDefs) == 0 {
+		return spec.SessionID(id), nil, nil
+	}
+	return spec.SessionID(id), append([]spec.SkillDef(nil), cfg.activeDefs...), nil
 }
 
 func (r *Runtime) CloseSession(ctx context.Context, sid spec.SessionID) error {

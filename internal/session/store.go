@@ -43,7 +43,7 @@ type NewSessionParams struct {
 	MaxActivePerSession int
 
 	// Optional initial active skill keys (activated with LoadModeReplace).
-	ActiveKeys []spec.SkillKey
+	ActiveKeys []spec.ProviderSkillKey
 }
 
 func NewStore(cfg StoreConfig) *Store {
@@ -149,7 +149,7 @@ func (st *Store) Delete(id string) {
 }
 
 // PruneSkill removes the given key from all sessions' active lists.
-func (st *Store) PruneSkill(key spec.SkillKey) {
+func (st *Store) PruneSkill(key spec.ProviderSkillKey) {
 	// Collect sessions under store lock, then prune outside to avoid holding the
 	// global lock while taking per-session locks.
 	st.mu.Lock()

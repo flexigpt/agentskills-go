@@ -53,8 +53,8 @@ func (s *Session) toolLoad(ctx context.Context, args spec.LoadArgs) (spec.LoadOu
 	}
 
 	// Resolve handles -> internal keys (dedupe).
-	reqKeys := make([]spec.SkillKey, 0, len(args.Skills))
-	seen := map[spec.SkillKey]struct{}{}
+	reqKeys := make([]spec.ProviderSkillKey, 0, len(args.Skills))
+	seen := map[spec.ProviderSkillKey]struct{}{}
 
 	for _, h := range args.Skills {
 		if strings.TrimSpace(h.Name) == "" || strings.TrimSpace(h.Location) == "" {
@@ -93,7 +93,7 @@ func (s *Session) toolUnload(ctx context.Context, args spec.UnloadArgs) (spec.Un
 
 	if args.All {
 		s.mu.Lock()
-		s.activeSet = map[spec.SkillKey]struct{}{}
+		s.activeSet = map[spec.ProviderSkillKey]struct{}{}
 
 		s.activeOrder = nil
 		s.stateVersion++
@@ -107,7 +107,7 @@ func (s *Session) toolUnload(ctx context.Context, args spec.UnloadArgs) (spec.Un
 	}
 
 	// Resolve handles to keys.
-	rm := map[spec.SkillKey]struct{}{}
+	rm := map[spec.ProviderSkillKey]struct{}{}
 
 	for _, h := range args.Skills {
 		if strings.TrimSpace(h.Name) == "" || strings.TrimSpace(h.Location) == "" {

@@ -78,7 +78,7 @@ func TestProvider_IndexAndLoadBody(t *testing.T) {
 
 	_, err = p.Index(
 		t.Context(),
-		spec.SkillKey{Type: "wrong", SkillHandle: spec.SkillHandle{Name: "hello-skill", Location: root}},
+		spec.SkillDef{Type: "wrong", Name: "hello-skill", Location: root},
 	)
 	if err == nil || !errors.Is(err, spec.ErrInvalidArgument) {
 		t.Fatalf("expected invalid argument for wrong type, got %v", err)
@@ -86,7 +86,7 @@ func TestProvider_IndexAndLoadBody(t *testing.T) {
 
 	rec, err := p.Index(
 		t.Context(),
-		spec.SkillKey{Type: Type, SkillHandle: spec.SkillHandle{Name: "hello-skill", Location: root}},
+		spec.SkillDef{Type: Type, Name: "hello-skill", Location: root},
 	)
 	if err != nil {
 		t.Fatalf("Index: %v", err)
@@ -127,7 +127,7 @@ func TestProvider_RunScriptDisabled(t *testing.T) {
 
 	_, err = p.RunScript(
 		t.Context(),
-		spec.SkillKey{Type: Type, SkillHandle: spec.SkillHandle{Name: "hello-skill", Location: root}},
+		spec.ProviderSkillKey{Type: Type, Name: "hello-skill", Location: root},
 		"scripts/x.sh",
 		nil,
 		nil,
