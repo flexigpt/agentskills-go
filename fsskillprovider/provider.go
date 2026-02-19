@@ -29,7 +29,10 @@ type userLocationError struct {
 }
 
 func (e userLocationError) Error() string {
-	return fmt.Sprintf("invalid skill location %q", e.input)
+	if e.err == nil {
+		return fmt.Sprintf("invalid skill location %q", e.input)
+	}
+	return fmt.Sprintf("invalid skill location %q: %v", e.input, e.err)
 }
 
 func (e userLocationError) Unwrap() error { return e.err }
