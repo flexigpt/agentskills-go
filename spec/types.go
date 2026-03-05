@@ -3,6 +3,23 @@ package spec
 // SessionID identifies a runtime session (UUIDv7 string).
 type SessionID string
 
+// SkillActivity controls whether SkillsPromptXML includes active, inactive, or both sets.
+type SkillActivity string
+
+const (
+	// SkillActivityAny returns both:
+	//   - <activeSkills> (if SessionID is set)
+	//   - <availableSkills> (inactive skills if SessionID is set; otherwise all skills)
+	SkillActivityAny SkillActivity = "any"
+
+	// SkillActivityActive returns only <activeSkills>. Requires SessionID.
+	SkillActivityActive SkillActivity = "active"
+
+	// SkillActivityInactive returns only <availableSkills> for inactive skills. If SessionID
+	// is empty, all skills are treated as inactive.
+	SkillActivityInactive SkillActivity = "inactive"
+)
+
 // SkillHandle is the LLM-facing selector for a skill.
 //
 // IMPORTANT CONTRACT:

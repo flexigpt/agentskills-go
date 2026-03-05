@@ -265,9 +265,9 @@ func (r *Runtime) ListSkills(ctx context.Context, filter *SkillListFilter) ([]sp
 
 	// Validate activity/session constraints early.
 	switch cfg.Activity {
-	case SkillActivityAny, SkillActivityInactive:
+	case spec.SkillActivityAny, spec.SkillActivityInactive:
 		// OK.
-	case SkillActivityActive:
+	case spec.SkillActivityActive:
 		if cfg.SessionID == "" {
 			return nil, fmt.Errorf("%w: activity=active requires sessionID", spec.ErrInvalidArgument)
 		}
@@ -300,7 +300,7 @@ func (r *Runtime) ListSkills(ctx context.Context, filter *SkillListFilter) ([]sp
 		activeSet[k] = struct{}{}
 	}
 
-	if cfg.Activity == SkillActivityAny {
+	if cfg.Activity == spec.SkillActivityAny {
 		out := make([]spec.SkillRecord, 0, len(entries))
 		for _, e := range entries {
 			out = append(out, e.Record)
@@ -312,11 +312,11 @@ func (r *Runtime) ListSkills(ctx context.Context, filter *SkillListFilter) ([]sp
 	for _, e := range entries {
 		_, isActive := activeSet[e.Key]
 		switch cfg.Activity {
-		case SkillActivityActive:
+		case spec.SkillActivityActive:
 			if isActive {
 				out = append(out, e.Record)
 			}
-		case SkillActivityInactive:
+		case spec.SkillActivityInactive:
 			if !isActive {
 				out = append(out, e.Record)
 			}

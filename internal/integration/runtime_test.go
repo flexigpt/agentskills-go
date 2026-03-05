@@ -394,39 +394,39 @@ func TestRuntime_ListSkills_ActivityAndSessionFilters(t *testing.T) {
 		},
 		{
 			name:      "activity any with session => all records",
-			filter:    &agentskills.SkillListFilter{SessionID: sid, Activity: agentskills.SkillActivityAny},
+			filter:    &agentskills.SkillListFilter{SessionID: sid, Activity: spec.SkillActivityAny},
 			wantCount: 3,
 		},
 		{
 			name:      "activity active with session => only active",
-			filter:    &agentskills.SkillListFilter{SessionID: sid, Activity: agentskills.SkillActivityActive},
+			filter:    &agentskills.SkillListFilter{SessionID: sid, Activity: spec.SkillActivityActive},
 			wantCount: 2,
 		},
 		{
 			name:      "activity inactive with session => only inactive",
-			filter:    &agentskills.SkillListFilter{SessionID: sid, Activity: agentskills.SkillActivityInactive},
+			filter:    &agentskills.SkillListFilter{SessionID: sid, Activity: spec.SkillActivityInactive},
 			wantCount: 1,
 		},
 		{
 			name:      "activity inactive without session => treated like all",
-			filter:    &agentskills.SkillListFilter{Activity: agentskills.SkillActivityInactive},
+			filter:    &agentskills.SkillListFilter{Activity: spec.SkillActivityInactive},
 			wantCount: 3,
 		},
 		{
 			name:    "activity active without session => invalid argument",
-			filter:  &agentskills.SkillListFilter{Activity: agentskills.SkillActivityActive},
+			filter:  &agentskills.SkillListFilter{Activity: spec.SkillActivityActive},
 			wantErr: spec.ErrInvalidArgument,
 		},
 		{
 			name:    "invalid activity => invalid argument",
-			filter:  &agentskills.SkillListFilter{Activity: agentskills.SkillActivity("nope")},
+			filter:  &agentskills.SkillListFilter{Activity: spec.SkillActivity("nope")},
 			wantErr: spec.ErrInvalidArgument,
 		},
 		{
 			name: "session missing => ErrSessionNotFound",
 			filter: &agentskills.SkillListFilter{
 				SessionID: spec.SessionID("missing"),
-				Activity:  agentskills.SkillActivityAny,
+				Activity:  spec.SkillActivityAny,
 			},
 			wantErr: spec.ErrSessionNotFound,
 		},
@@ -434,7 +434,7 @@ func TestRuntime_ListSkills_ActivityAndSessionFilters(t *testing.T) {
 			name: "allowSkills applies + inactive: allow only A and C, but A is active => only C remains",
 			filter: &agentskills.SkillListFilter{
 				SessionID:      sid,
-				Activity:       agentskills.SkillActivityInactive,
+				Activity:       spec.SkillActivityInactive,
 				AllowSkills:    []spec.SkillDef{defA, defC},
 				NamePrefix:     "",
 				Types:          nil,
@@ -554,7 +554,7 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 	before1 := p.loadBodyCalls.Load()
 	xml2, err := rt.SkillsPromptXML(
 		ctx,
-		&agentskills.SkillFilter{SessionID: sid, Activity: agentskills.SkillActivityAny},
+		&agentskills.SkillFilter{SessionID: sid, Activity: spec.SkillActivityAny},
 	)
 	if err != nil {
 		t.Fatalf("SkillsPromptXML(any+session): %v", err)
@@ -575,7 +575,7 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 	// Calling prompt again should not trigger extra LoadBody calls (catalog cache).
 	xml2b, err := rt.SkillsPromptXML(
 		ctx,
-		&agentskills.SkillFilter{SessionID: sid, Activity: agentskills.SkillActivityAny},
+		&agentskills.SkillFilter{SessionID: sid, Activity: spec.SkillActivityAny},
 	)
 	if err != nil {
 		t.Fatalf("SkillsPromptXML(any+session) again: %v", err)
@@ -616,7 +616,7 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 	// ActivityActive => activeSkills root only.
 	xml3, err := rt.SkillsPromptXML(
 		ctx,
-		&agentskills.SkillFilter{SessionID: sid, Activity: agentskills.SkillActivityActive},
+		&agentskills.SkillFilter{SessionID: sid, Activity: spec.SkillActivityActive},
 	)
 	if err != nil {
 		t.Fatalf("SkillsPromptXML(active): %v", err)
@@ -632,7 +632,7 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 	// ActivityInactive => availableSkills root only (inactive skills).
 	xml4, err := rt.SkillsPromptXML(
 		ctx,
-		&agentskills.SkillFilter{SessionID: sid, Activity: agentskills.SkillActivityInactive},
+		&agentskills.SkillFilter{SessionID: sid, Activity: spec.SkillActivityInactive},
 	)
 	if err != nil {
 		t.Fatalf("SkillsPromptXML(inactive): %v", err)
@@ -649,7 +649,7 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 	// Allow only C (inactive). Active should become empty, available should contain only C.
 	xml5, err := rt.SkillsPromptXML(ctx, &agentskills.SkillFilter{
 		SessionID:      sid,
-		Activity:       agentskills.SkillActivityAny,
+		Activity:       spec.SkillActivityAny,
 		AllowSkills:    []spec.SkillDef{defC},
 		NamePrefix:     "",
 		Types:          nil,
@@ -691,7 +691,7 @@ func TestRuntime_SkillsPromptXML_NamePrefixIsLLMHandleNotHostName(t *testing.T) 
 	_ = mustAddSkill(t, rt, ctx, defA)
 	_ = mustAddSkill(t, rt, ctx, defB)
 
-	xmlAll, err := rt.SkillsPromptXML(ctx, &agentskills.SkillFilter{Activity: agentskills.SkillActivityAny})
+	xmlAll, err := rt.SkillsPromptXML(ctx, &agentskills.SkillFilter{Activity: spec.SkillActivityAny})
 	if err != nil {
 		t.Fatalf("SkillsPromptXML: %v", err)
 	}
@@ -716,7 +716,7 @@ func TestRuntime_SkillsPromptXML_NamePrefixIsLLMHandleNotHostName(t *testing.T) 
 	// Prompt NamePrefix uses LLM handle name.
 	xmlOne, err := rt.SkillsPromptXML(
 		ctx,
-		&agentskills.SkillFilter{NamePrefix: pick, Activity: agentskills.SkillActivityAny},
+		&agentskills.SkillFilter{NamePrefix: pick, Activity: spec.SkillActivityAny},
 	)
 	if err != nil {
 		t.Fatalf("SkillsPromptXML(NamePrefix=%q): %v", pick, err)
@@ -764,7 +764,7 @@ func TestRuntime_RemoveSkill_PrunesFromAllSessions_ReAddDoesNotResurrectActive(t
 	// If prune didn't happen, the session would still consider it active after re-add.
 	xmlOut, err := rt.SkillsPromptXML(
 		ctx,
-		&agentskills.SkillFilter{SessionID: sid, Activity: agentskills.SkillActivityAny},
+		&agentskills.SkillFilter{SessionID: sid, Activity: spec.SkillActivityAny},
 	)
 	if err != nil {
 		t.Fatalf("SkillsPromptXML: %v", err)
@@ -826,7 +826,10 @@ func TestRuntime_SkillsPromptXML_Errors(t *testing.T) {
 		{
 			name: "activity active requires session",
 			do: func() error {
-				_, err := rt.SkillsPromptXML(ctx, &agentskills.SkillFilter{Activity: agentskills.SkillActivityActive})
+				_, err := rt.SkillsPromptXML(
+					ctx,
+					&agentskills.SkillFilter{Activity: spec.SkillActivityActive},
+				)
 				return err
 			},
 			wantErr: spec.ErrInvalidArgument,
@@ -834,7 +837,10 @@ func TestRuntime_SkillsPromptXML_Errors(t *testing.T) {
 		{
 			name: "invalid activity",
 			do: func() error {
-				_, err := rt.SkillsPromptXML(ctx, &agentskills.SkillFilter{Activity: agentskills.SkillActivity("bad")})
+				_, err := rt.SkillsPromptXML(
+					ctx,
+					&agentskills.SkillFilter{Activity: spec.SkillActivity("bad")},
+				)
 				return err
 			},
 			wantErr: spec.ErrInvalidArgument,
@@ -844,7 +850,7 @@ func TestRuntime_SkillsPromptXML_Errors(t *testing.T) {
 			do: func() error {
 				_, err := rt.SkillsPromptXML(
 					ctx,
-					&agentskills.SkillFilter{SessionID: "missing", Activity: agentskills.SkillActivityAny},
+					&agentskills.SkillFilter{SessionID: "missing", Activity: spec.SkillActivityAny},
 				)
 				return err
 			},

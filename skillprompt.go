@@ -10,23 +10,6 @@ import (
 	"github.com/flexigpt/agentskills-go/spec"
 )
 
-// SkillActivity controls whether SkillsPromptXML includes active, inactive, or both sets.
-type SkillActivity string
-
-const (
-	// SkillActivityAny returns both:
-	//   - <activeSkills> (if SessionID is set)
-	//   - <availableSkills> (inactive skills if SessionID is set; otherwise all skills)
-	SkillActivityAny SkillActivity = "any"
-
-	// SkillActivityActive returns only <activeSkills>. Requires SessionID.
-	SkillActivityActive SkillActivity = "active"
-
-	// SkillActivityInactive returns only <availableSkills> for inactive skills. If SessionID
-	// is empty, all skills are treated as inactive.
-	SkillActivityInactive SkillActivity = "inactive"
-)
-
 // SkillFilter is an optional filter for listing/prompting skills (LLM/prompt-facing).
 //
 // Semantics:
@@ -57,8 +40,8 @@ type SkillFilter struct {
 	// SessionID optionally scopes active/inactive filtering.
 	SessionID spec.SessionID
 
-	// Activity defaults to SkillActivityAny.
-	Activity SkillActivity
+	// Activity defaults to spec.SkillActivityAny.
+	Activity spec.SkillActivity
 }
 
 // SkillListFilter is a HOST/LIFECYCLE listing filter.
@@ -71,7 +54,7 @@ type SkillListFilter struct {
 	AllowSkills    []spec.SkillDef
 
 	SessionID spec.SessionID
-	Activity  SkillActivity
+	Activity  spec.SkillActivity
 }
 
 // SkillsPromptXML is the single prompt API.
@@ -98,9 +81,9 @@ func (r *Runtime) SkillsPromptXML(ctx context.Context, f *SkillFilter) (string, 
 
 	// Validate activity/session constraints early.
 	switch cfg.Activity {
-	case SkillActivityAny, SkillActivityInactive:
+	case spec.SkillActivityAny, spec.SkillActivityInactive:
 		// OK (SessionID optional).
-	case SkillActivityActive:
+	case spec.SkillActivityActive:
 		if cfg.SessionID == "" {
 			return "", fmt.Errorf("%w: activity=active requires sessionID", spec.ErrInvalidArgument)
 		}
@@ -129,8 +112,8 @@ func (r *Runtime) SkillsPromptXML(ctx context.Context, f *SkillFilter) (string, 
 		}
 	}
 
-	includeActive := cfg.Activity == SkillActivityAny || cfg.Activity == SkillActivityActive
-	includeAvailable := cfg.Activity == SkillActivityAny || cfg.Activity == SkillActivityInactive
+	includeActive := cfg.Activity == spec.SkillActivityAny || cfg.Activity == spec.SkillActivityActive
+	includeAvailable := cfg.Activity == spec.SkillActivityAny || cfg.Activity == spec.SkillActivityInactive
 
 	// Active section: preserve historical CDATA encoding by reusing catalog.ActiveSkillsXML.
 	var activeXML string
@@ -167,7 +150,7 @@ func (r *Runtime) SkillsPromptXML(ctx context.Context, f *SkillFilter) (string, 
 		if err != nil {
 			return "", err
 		}
-	} else if cfg.Activity == SkillActivityActive {
+	} else if cfg.Activity == spec.SkillActivityActive {
 		// Emit an empty <activeSkills>...</activeSkills> section for "active" queries.
 		var err error
 		activeXML, err = catalog.ActiveSkillsXML(nil)
@@ -218,7 +201,7 @@ func (r *Runtime) SkillsPromptXML(ctx context.Context, f *SkillFilter) (string, 
 
 func normalizeSkillListFilter(f *SkillListFilter) SkillListFilter {
 	if f == nil {
-		return SkillListFilter{Activity: SkillActivityAny}
+		return SkillListFilter{Activity: spec.SkillActivityAny}
 	}
 	types := make([]string, 0, len(f.Types))
 	seenT := map[string]struct{}{}
@@ -245,9 +228,9 @@ func normalizeSkillListFilter(f *SkillListFilter) SkillListFilter {
 		seenD[d] = struct{}{}
 		allow = append(allow, d)
 	}
-	act := SkillActivity(strings.TrimSpace(string(f.Activity)))
+	act := spec.SkillActivity(strings.TrimSpace(string(f.Activity)))
 	if act == "" {
-		act = SkillActivityAny
+		act = spec.SkillActivityAny
 	}
 	return SkillListFilter{
 		Types:          types,
@@ -273,7 +256,7 @@ func toCatalogUserFilter(f *SkillListFilter) catalog.UserFilter {
 
 func normalizeSkillsPromptFilter(f *SkillFilter) SkillFilter {
 	if f == nil {
-		return SkillFilter{Activity: SkillActivityAny}
+		return SkillFilter{Activity: spec.SkillActivityAny}
 	}
 
 	types := make([]string, 0, len(f.Types))
@@ -304,9 +287,9 @@ func normalizeSkillsPromptFilter(f *SkillFilter) SkillFilter {
 		allow = append(allow, d)
 	}
 
-	act := SkillActivity(strings.TrimSpace(string(f.Activity)))
+	act := spec.SkillActivity(strings.TrimSpace(string(f.Activity)))
 	if act == "" {
-		act = SkillActivityAny
+		act = spec.SkillActivityAny
 	}
 
 	return SkillFilter{

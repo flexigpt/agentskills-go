@@ -69,7 +69,7 @@
 
   ```go
   xml, _ := rt.SkillsPromptXML(ctx, &agentskills.SkillFilter{
-    Activity: agentskills.SkillActivityInactive, // with no SessionID: treated as "all skills"
+    Activity: spec.SkillActivityInactive, // with no SessionID: treated as "all skills"
   })
   // <availableSkills> ... </availableSkills>
   ```
@@ -90,7 +90,7 @@
   ```go
   activeXML, _ := rt.SkillsPromptXML(ctx, &agentskills.SkillFilter{
     SessionID: sid,
-    Activity:  agentskills.SkillActivityActive,
+    Activity:  spec.SkillActivityActive,
   })
   // <activeSkills>
   //   <skill name="hello-skill"><![CDATA[ ... SKILL.md body ... ]]></skill>
@@ -102,7 +102,7 @@
   ```go
   xml, _ := rt.SkillsPromptXML(ctx, &agentskills.SkillFilter{
     SessionID: sid,
-    Activity:  agentskills.SkillActivityAny,
+    Activity:  spec.SkillActivityAny,
   })
   // <skillsPrompt>
   //   <availableSkills>...</availableSkills>
