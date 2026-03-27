@@ -35,16 +35,6 @@ func SkillsUnloadTool() llmtoolsgoSpec.Tool {
 		"description":"if true, unload all active skills"
 	}
 },
-"anyOf":[
-	{
-		"required":["all"],
-		"properties":{"all":{"const":true}}
-	},
-	{
-		"required":["skills"],
-		"properties":{"skills":{"minItems":1}}
-	}
-],
 "additionalProperties":false
 }`),
 		GoImpl:     llmtoolsgoSpec.GoToolImpl{FuncID: FuncIDSkillsUnload},
