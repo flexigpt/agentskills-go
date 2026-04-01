@@ -2,13 +2,13 @@ package spec
 
 import llmtoolsgoSpec "github.com/flexigpt/llmtools-go/spec"
 
-const FuncIDSkillsRunScript llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/skills.runscript"
+const FuncIDSkillsRunScript llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/skills-runscript"
 
 func SkillsRunScriptTool() llmtoolsgoSpec.Tool {
 	return llmtoolsgoSpec.Tool{
 		SchemaVersion: llmtoolsgoSpec.SchemaVersion,
 		ID:            "019c4188-ac5a-7e5c-8e68-b22e897c4885",
-		Slug:          "skills.runscript",
+		Slug:          "skills-runscript",
 		Version:       "v1.0.0",
 		DisplayName:   "Skills Run Script",
 		Description:   "execute a script from within the selected active skill",

@@ -2,13 +2,13 @@ package spec
 
 import llmtoolsgoSpec "github.com/flexigpt/llmtools-go/spec"
 
-const FuncIDSkillsReadResource llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/skills.readresource"
+const FuncIDSkillsReadResource llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/skills-readresource"
 
 func SkillsReadResourceTool() llmtoolsgoSpec.Tool {
 	return llmtoolsgoSpec.Tool{
 		SchemaVersion: llmtoolsgoSpec.SchemaVersion,
 		ID:            "019c4188-73e6-7301-8d3d-28a5d9e23f9e",
-		Slug:          "skills.readresource",
+		Slug:          "skills-readresource",
 		Version:       "v1.0.0",
 		DisplayName:   "Skills Read Resource",
 		Description:   "read a skill-scoped resource relative to an active skill base location",

@@ -6,7 +6,7 @@ import (
 	llmtoolsgoSpec "github.com/flexigpt/llmtools-go/spec"
 )
 
-// LoadMode controls how skills.load updates the active list.
+// LoadMode controls how skills-load updates the active list.
 type LoadMode string
 
 const (

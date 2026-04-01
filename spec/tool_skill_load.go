@@ -2,13 +2,13 @@ package spec
 
 import llmtoolsgoSpec "github.com/flexigpt/llmtools-go/spec"
 
-const FuncIDSkillsLoad llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/skills.load"
+const FuncIDSkillsLoad llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/skills-load"
 
 func SkillsLoadTool() llmtoolsgoSpec.Tool {
 	return llmtoolsgoSpec.Tool{
 		SchemaVersion: llmtoolsgoSpec.SchemaVersion,
 		ID:            "019c4188-4db4-7ad8-bdd0-4126aa1fee00",
-		Slug:          "skills.load",
+		Slug:          "skills-load",
 		Version:       "v1.0.0",
 		DisplayName:   "Skills Load",
 		Description:   "load one or more skills into the current session",

@@ -31,7 +31,7 @@
   - `providers/fsskillprovider`: skills backed by a local filesystem directory
 
 - Tool wiring via [`llmtools-go`](https://github.com/flexigpt/llmtools-go):
-  - `skills.load`, `skills.unload`, `skills.readresource`, `skills.runscript`
+  - `skills-load`, `skills-unload`, `skills-readresource`, `skills-runscript`
   - A runtime prompt API `Runtime.SkillsPromptXML(...)` which can emit:
     - `<availableSkills>...</availableSkills>`
     - `<activeSkills>...</activeSkills>`
@@ -114,7 +114,7 @@
 
   ```go
   reg, _ := rt.NewSessionRegistry(ctx, sid)
-  // Registry includes: skills.load / skills.unload / skills.readresource / skills.runscript
+  // Registry includes: skills-load / skills-unload / skills-readresource / skills-runscript
   _ = reg
   ```
 
@@ -122,10 +122,10 @@
 
 The FS provider is intentionally thin and delegates most sandboxing/hardening to `llmtools-go`:
 
-- `skills.readresource` uses `llmtools-go/fstool` and is scoped to the skill root via:
+- `skills-readresource` uses `llmtools-go/fstool` and is scoped to the skill root via:
   - `allowedRoots = [skillRoot]`
   - `workBaseDir = skillRoot`
-- `skills.runscript` uses `llmtools-go/exectool` and is scoped similarly
+- `skills-runscript` uses `llmtools-go/exectool` and is scoped similarly
 - `RunScript` is disabled by default; enable explicitly via `fsskillprovider.WithRunScripts(true)`
 
 ## End to end examples

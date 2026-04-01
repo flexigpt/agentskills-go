@@ -2,13 +2,13 @@ package spec
 
 import llmtoolsgoSpec "github.com/flexigpt/llmtools-go/spec"
 
-const FuncIDSkillsUnload llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/skills.unload"
+const FuncIDSkillsUnload llmtoolsgoSpec.FuncID = "github.com/flexigpt/agentskills-go/skills-unload"
 
 func SkillsUnloadTool() llmtoolsgoSpec.Tool {
 	return llmtoolsgoSpec.Tool{
 		SchemaVersion: llmtoolsgoSpec.SchemaVersion,
 		ID:            "019c4188-ce79-7a71-ac5a-a54cf5de3815",
-		Slug:          "skills.unload",
+		Slug:          "skills-unload",
 		Version:       "v1.0.0",
 		DisplayName:   "Skills Unload",
 		Description:   "unload skills from the current session",
