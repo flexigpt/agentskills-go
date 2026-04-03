@@ -2,14 +2,24 @@ package integration
 
 import (
 	"context"
-	"encoding/xml"
-	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/flexigpt/agentskills-go"
 	"github.com/flexigpt/agentskills-go/spec"
 	llmtoolsgoSpec "github.com/flexigpt/llmtools-go/spec"
+)
+
+const (
+	availableSkillsStart         = "<<<AVAILABLE_SKILLS>>>"
+	availableSkillsEnd           = "<<<END_AVAILABLE_SKILLS>>>"
+	activeSkillsStart            = "<<<ACTIVE_SKILLS>>>"
+	activeSkillsEnd              = "<<<END_ACTIVE_SKILLS>>>"
+	skillsPromptStart            = "<<<SKILLS_PROMPT>>>"
+	skillsPromptEnd              = "<<<END_SKILLS_PROMPT>>>"
+	nextAvailableSkillsSeparator = "---"
+	nextActiveSkillsSeparator    = "<!-- SKILL SEPARATOR -->"
+	nonePromptString             = "(none)"
 )
 
 type fakeProvider struct {
@@ -103,79 +113,4 @@ func mustNewSession(
 		t.Fatalf("NewSession: got empty session id")
 	}
 	return sid, active
-}
-
-func xmlRootName(t *testing.T, s string) string {
-	t.Helper()
-	dec := xml.NewDecoder(strings.NewReader(s))
-	for {
-		tok, err := dec.Token()
-		if err != nil {
-			t.Fatalf("xmlRootName token: %v\nxml=%s", err, s)
-		}
-		if se, ok := tok.(xml.StartElement); ok {
-			return se.Name.Local
-		}
-	}
-}
-
-type availableSkillsDoc struct {
-	XMLName xml.Name `xml:"availableSkills"`
-	Skills  []struct {
-		Name        string `xml:"name"`
-		Description string `xml:"description"`
-		Location    string `xml:"location"`
-	} `xml:"skill"`
-}
-
-type activeSkillsDoc struct {
-	XMLName xml.Name `xml:"activeSkills"`
-	Skills  []struct {
-		Name string `xml:"name,attr"`
-		Body string `xml:",chardata"`
-	} `xml:"skill"`
-}
-
-type skillsPromptDoc struct {
-	XMLName   xml.Name            `xml:"skillsPrompt"`
-	Available *availableSkillsDoc `xml:"availableSkills"`
-	Active    *activeSkillsDoc    `xml:"activeSkills"`
-}
-
-const availableSkillsRoot = "availableSkills"
-
-func mustUnmarshalAvailable(t *testing.T, s string) availableSkillsDoc {
-	t.Helper()
-	var doc availableSkillsDoc
-	if err := xml.Unmarshal([]byte(s), &doc); err != nil {
-		t.Fatalf("unmarshal availableSkills: %v\nxml=%s", err, s)
-	}
-	if doc.XMLName.Local != availableSkillsRoot {
-		t.Fatalf("expected root %s, got %q", availableSkillsRoot, doc.XMLName.Local)
-	}
-	return doc
-}
-
-func mustUnmarshalActive(t *testing.T, s string) activeSkillsDoc {
-	t.Helper()
-	var doc activeSkillsDoc
-	if err := xml.Unmarshal([]byte(s), &doc); err != nil {
-		t.Fatalf("unmarshal activeSkills: %v\nxml=%s", err, s)
-	}
-	if doc.XMLName.Local != "activeSkills" {
-		t.Fatalf("expected root activeSkills, got %q", doc.XMLName.Local)
-	}
-	return doc
-}
-
-func mustUnmarshalPrompt(t *testing.T, s string) skillsPromptDoc {
-	t.Helper()
-	var doc skillsPromptDoc
-	if err := xml.Unmarshal([]byte(s), &doc); err != nil {
-		t.Fatalf("unmarshal skillsPrompt: %v\nxml=%s", err, s)
-	}
-	if doc.XMLName.Local != "skillsPrompt" {
-		t.Fatalf("expected root skillsPrompt, got %q", doc.XMLName.Local)
-	}
-	return doc
 }

@@ -10,6 +10,11 @@ import (
 	"github.com/flexigpt/agentskills-go/spec"
 )
 
+const (
+	skillsPromptStart = "<<<SKILLS_PROMPT>>>"
+	skillsPromptEnd   = "<<<END_SKILLS_PROMPT>>>"
+)
+
 // SkillFilter is an optional filter for listing/prompting skills (LLM/prompt-facing).
 //
 // Semantics:
@@ -57,16 +62,15 @@ type SkillListFilter struct {
 	Activity  spec.SkillActivity
 }
 
-// SkillsPromptXML is the single prompt API.
+// SkillsPrompt builds prompt-facing text for available and/or active skills.
 //
-// Output compatibility rules (to preserve previous XML “standards” as much as possible):
-//   - If only one section is requested, the root is exactly one of:
-//   - <availableSkills>...</availableSkills>
-//   - <activeSkills>...</activeSkills>
-//     (matching the historical outputs from internal/catalog XML builders).
-//   - If both sections are requested simultaneously, the output is wrapped in:
-//     <skillsPrompt> ... </skillsPrompt>
-func (r *Runtime) SkillsPromptXML(ctx context.Context, f *SkillFilter) (string, error) {
+// Output rules:
+//   - If only one section is requested, the return value is exactly that section.
+//   - If both sections are requested, the output is wrapped in:
+//     <<<SKILLS_PROMPT>>>
+//     ...
+//     <<<END_SKILLS_PROMPT>>>
+func (r *Runtime) SkillsPrompt(ctx context.Context, f *SkillFilter) (string, error) {
 	if ctx == nil {
 		return "", fmt.Errorf("%w: nil context", spec.ErrInvalidArgument)
 	}
@@ -115,8 +119,8 @@ func (r *Runtime) SkillsPromptXML(ctx context.Context, f *SkillFilter) (string, 
 	includeActive := cfg.Activity == spec.SkillActivityAny || cfg.Activity == spec.SkillActivityActive
 	includeAvailable := cfg.Activity == spec.SkillActivityAny || cfg.Activity == spec.SkillActivityInactive
 
-	// Active section: preserve historical CDATA encoding by reusing catalog.ActiveSkillsXML.
-	var activeXML string
+	// Active section: preserve session active order while respecting the filtered catalog view.
+	var activePrompt string
 
 	if includeActive && cfg.SessionID != "" {
 		// Build membership set for "records" (filtered catalog view), so active section
@@ -145,22 +149,13 @@ func (r *Runtime) SkillsPromptXML(ctx context.Context, f *SkillFilter) (string, 
 			items = append(items, catalog.ActiveSkillItem{Name: h.Name, Body: body})
 		}
 
-		var err error
-		activeXML, err = catalog.ActiveSkillsXML(items)
-		if err != nil {
-			return "", err
-		}
+		activePrompt = catalog.ActiveSkillsPrompt(items)
 	} else if cfg.Activity == spec.SkillActivityActive {
-		// Emit an empty <activeSkills>...</activeSkills> section for "active" queries.
-		var err error
-		activeXML, err = catalog.ActiveSkillsXML(nil)
-		if err != nil {
-			return "", err
-		}
+		activePrompt = catalog.ActiveSkillsPrompt(nil)
 	}
 
-	// Available section: reuse catalog.AvailableSkillsXML to preserve tag structure + ordering.
-	var availableXML string
+	// Available section: prompt-visible metadata only. With SessionID set, "available" means inactive.
+	var availablePrompt string
 	if includeAvailable {
 		items := make([]catalog.AvailableSkillItem, 0, len(records))
 		for _, rec := range records {
@@ -180,23 +175,21 @@ func (r *Runtime) SkillsPromptXML(ctx context.Context, f *SkillFilter) (string, 
 				Location:    h.Location,
 			})
 		}
-		var err error
-		availableXML, err = catalog.AvailableSkillsXML(items)
-		if err != nil {
-			return "", err
-		}
+
+		availablePrompt = catalog.AvailableSkillsPrompt(items)
+
 	}
 
 	// If only one section is requested, return it as the root (backward-compatible structure).
-	if strings.TrimSpace(activeXML) == "" && strings.TrimSpace(availableXML) != "" {
-		return availableXML, nil
+	if strings.TrimSpace(activePrompt) == "" && strings.TrimSpace(availablePrompt) != "" {
+		return availablePrompt, nil
 	}
-	if strings.TrimSpace(availableXML) == "" && strings.TrimSpace(activeXML) != "" {
-		return activeXML, nil
+	if strings.TrimSpace(availablePrompt) == "" && strings.TrimSpace(activePrompt) != "" {
+		return activePrompt, nil
 	}
 
 	// Otherwise wrap both sections into one well-formed document.
-	return wrapSkillsPromptXML(availableXML, activeXML), nil
+	return wrapSkillsPrompt(availablePrompt, activePrompt), nil
 }
 
 func normalizeSkillListFilter(f *SkillListFilter) SkillListFilter {
@@ -302,9 +295,9 @@ func normalizeSkillsPromptFilter(f *SkillFilter) SkillFilter {
 	}
 }
 
-func wrapSkillsPromptXML(parts ...string) string {
+func wrapSkillsPrompt(parts ...string) string {
 	var b strings.Builder
-	b.WriteString("<skillsPrompt>")
+	b.WriteString(skillsPromptStart)
 	wrote := false
 	for _, p := range parts {
 		if strings.TrimSpace(p) == "" {
@@ -312,24 +305,13 @@ func wrapSkillsPromptXML(parts ...string) string {
 		}
 		wrote = true
 		b.WriteByte('\n')
-		b.WriteString(indentLines(p, "  "))
+		b.WriteString(p)
 	}
 	if wrote {
 		b.WriteByte('\n')
 	}
-	b.WriteString("</skillsPrompt>")
+	b.WriteString(skillsPromptEnd)
 	return b.String()
-}
-
-func indentLines(s, prefix string) string {
-	if s == "" {
-		return ""
-	}
-	lines := strings.Split(s, "\n")
-	for i := range lines {
-		lines[i] = prefix + lines[i]
-	}
-	return strings.Join(lines, "\n")
 }
 
 func toCatalogPromptFilter(f *SkillFilter) catalog.PromptFilter {

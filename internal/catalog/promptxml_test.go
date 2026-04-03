@@ -1,114 +1,160 @@
 package catalog
 
 import (
-	"encoding/xml"
 	"reflect"
-	"strings"
 	"testing"
 )
 
-func TestAvailableSkillsXML_SortsAndEscapes(t *testing.T) {
-	t.Parallel()
-
-	in := []AvailableSkillItem{
-		{Name: "b", Description: "2 & 3", Location: "/2"},
-		{Name: "a", Description: "<x>", Location: "/9"},
-		{Name: "a", Description: "ok", Location: "/1"},
+func TestAvailableSkillsPrompt(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []AvailableSkillItem
+		want string
+	}{
+		{
+			name: "empty",
+			in:   nil,
+			want: `<<<AVAILABLE_SKILLS>>>
+(none)
+<<<END_AVAILABLE_SKILLS>>>`,
+		},
+		{
+			name: "sorts by name then location and preserves raw text",
+			in: []AvailableSkillItem{
+				{Name: "b", Description: "2 & 3", Location: "/2"},
+				{Name: "a", Description: "<x>", Location: "/9"},
+				{Name: "a", Description: "ok", Location: "/1"},
+			},
+			want: `<<<AVAILABLE_SKILLS>>>
+name: a
+location: /1
+description: ok
+---
+name: a
+location: /9
+description: <x>
+---
+name: b
+location: /2
+description: 2 & 3
+<<<END_AVAILABLE_SKILLS>>>`,
+		},
+		{
+			name: "trims and flattens inline fields and omits empty optional fields",
+			in: []AvailableSkillItem{
+				{Name: "  skill  ", Description: " line one\nline two ", Location: "  local  "},
+				{Name: "name-only"},
+			},
+			want: `<<<AVAILABLE_SKILLS>>>
+name: skill
+location: local
+description: line one line two
+---
+name: name-only
+<<<END_AVAILABLE_SKILLS>>>`,
+		},
 	}
 
-	orig := append([]AvailableSkillItem(nil), in...)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			orig := cloneAvailableSkillItems(tt.in)
 
-	s, err := AvailableSkillsXML(in)
-	if err != nil {
-		t.Fatalf("AvailableSkillsXML: %v", err)
-	}
-	if !strings.Contains(s, "<availableSkills") {
-		t.Fatalf("unexpected xml: %s", s)
-	}
+			got := AvailableSkillsPrompt(tt.in)
+			if got != tt.want {
+				t.Fatalf("AvailableSkillsPrompt() mismatch\n\ngot:\n%s\n\nwant:\n%s", got, tt.want)
+			}
 
-	// Ensure input slice was not mutated (function sorts a copy).
-	if !reflect.DeepEqual(in, orig) {
-		t.Fatalf("expected input not to be mutated; got=%v want=%v", in, orig)
-	}
-
-	var decoded availableSkills
-	if err := xml.Unmarshal([]byte(s), &decoded); err != nil {
-		t.Fatalf("xml.Unmarshal: %v", err)
-	}
-	if len(decoded.Skills) != 3 {
-		t.Fatalf("expected 3 skills, got %d", len(decoded.Skills))
-	}
-
-	// Sorted by name then Location.
-	if decoded.Skills[0].Name != "a" || decoded.Skills[0].Location != "/1" {
-		t.Fatalf("unexpected first: %+v", decoded.Skills[0])
-	}
-	if decoded.Skills[1].Name != "a" || decoded.Skills[1].Location != "/9" {
-		t.Fatalf("unexpected second: %+v", decoded.Skills[1])
-	}
-	if decoded.Skills[2].Name != "b" {
-		t.Fatalf("unexpected third: %+v", decoded.Skills[2])
-	}
-
-	// Ensure escaping happened on marshal: the raw string should not contain "<x>" inside description tags.
-	if strings.Contains(s, "<description><x></description>") {
-		t.Fatalf("expected description to be escaped, got: %s", s)
+			if !reflect.DeepEqual(tt.in, orig) {
+				t.Fatalf("AvailableSkillsPrompt() mutated input\n\ngot:  %#v\nwant: %#v", tt.in, orig)
+			}
+		})
 	}
 }
 
-func TestAvailableSkillsXML_Empty(t *testing.T) {
-	t.Parallel()
+func TestActiveSkillsPrompt(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []ActiveSkillItem
+		want string
+	}{
+		{
+			name: "empty",
+			in:   nil,
+			want: `<<<ACTIVE_SKILLS>>>
+(none)
+<<<END_ACTIVE_SKILLS>>>`,
+		},
+		{
+			name: "preserves input order and raw body text",
+			in: []ActiveSkillItem{
+				{Name: "s1", Body: "use <tag> & keep raw"},
+				{Name: "s2", Body: "second"},
+			},
+			want: `<<<ACTIVE_SKILLS>>>
+name: s1
+body:
+use <tag> & keep raw
+<!-- SKILL SEPARATOR -->
+name: s2
+body:
+second
+<<<END_ACTIVE_SKILLS>>>`,
+		},
+		{
+			name: "trims trailing newlines from body but preserves internal blank lines",
+			in: []ActiveSkillItem{
+				{Name: "planner", Body: "line one\n\nline three\n\n"},
+			},
+			want: `<<<ACTIVE_SKILLS>>>
+name: planner
+body:
+line one
 
-	s, err := AvailableSkillsXML(nil)
-	if err != nil {
-		t.Fatalf("AvailableSkillsXML: %v", err)
-	}
-	if !strings.Contains(s, "<availableSkills") {
-		t.Fatalf("unexpected xml: %s", s)
+line three
+<<<END_ACTIVE_SKILLS>>>`,
+		},
+		{
+			name: "empty body still renders body field",
+			in: []ActiveSkillItem{
+				{Name: "planner", Body: ""},
+			},
+			want: `<<<ACTIVE_SKILLS>>>
+name: planner
+body:
+<<<END_ACTIVE_SKILLS>>>`,
+		},
 	}
 
-	var decoded availableSkills
-	if err := xml.Unmarshal([]byte(s), &decoded); err != nil {
-		t.Fatalf("xml.Unmarshal: %v", err)
-	}
-	if len(decoded.Skills) != 0 {
-		t.Fatalf("expected 0 skills, got %d", len(decoded.Skills))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			orig := cloneActiveSkillItems(tt.in)
+
+			got := ActiveSkillsPrompt(tt.in)
+			if got != tt.want {
+				t.Fatalf("ActiveSkillsPrompt() mismatch\n\ngot:\n%s\n\nwant:\n%s", got, tt.want)
+			}
+
+			if !reflect.DeepEqual(tt.in, orig) {
+				t.Fatalf("ActiveSkillsPrompt() mutated input\n\ngot:  %#v\nwant: %#v", tt.in, orig)
+			}
+		})
 	}
 }
 
-func TestActiveSkillsXML_UsesCDATA_AndPreservesOrder(t *testing.T) {
-	t.Parallel()
+func cloneAvailableSkillItems(in []AvailableSkillItem) []AvailableSkillItem {
+	if in == nil {
+		return nil
+	}
+	out := make([]AvailableSkillItem, len(in))
+	copy(out, in)
+	return out
+}
 
-	in := []ActiveSkillItem{
-		{Name: "s1", Body: "use <tag> & keep raw"},
-		{Name: "s2", Body: "second"},
+func cloneActiveSkillItems(in []ActiveSkillItem) []ActiveSkillItem {
+	if in == nil {
+		return nil
 	}
-	s, err := ActiveSkillsXML(in)
-	if err != nil {
-		t.Fatalf("ActiveSkillsXML: %v", err)
-	}
-	if !strings.Contains(s, "<activeSkills") {
-		t.Fatalf("unexpected xml: %s", s)
-	}
-	// CDATA marker should appear.
-	if !strings.Contains(s, "<![CDATA[") {
-		t.Fatalf("expected CDATA, got: %s", s)
-	}
-
-	var decoded activeSkills
-	if err := xml.Unmarshal([]byte(s), &decoded); err != nil {
-		t.Fatalf("xml.Unmarshal: %v", err)
-	}
-	if len(decoded.Skills) != 2 {
-		t.Fatalf("expected 2 skills, got %d", len(decoded.Skills))
-	}
-	if decoded.Skills[0].Name != "s1" || decoded.Skills[1].Name != "s2" {
-		t.Fatalf("expected order preserved, got: %+v", decoded.Skills)
-	}
-	if decoded.Skills[0].Body != in[0].Body || decoded.Skills[1].Body != in[1].Body {
-		t.Fatalf("body mismatch: got=%q/%q want=%q/%q",
-			decoded.Skills[0].Body, decoded.Skills[1].Body,
-			in[0].Body, in[1].Body,
-		)
-	}
+	out := make([]ActiveSkillItem, len(in))
+	copy(out, in)
+	return out
 }

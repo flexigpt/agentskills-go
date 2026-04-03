@@ -3,7 +3,7 @@ package spec
 // SessionID identifies a runtime session (UUIDv7 string).
 type SessionID string
 
-// SkillActivity controls whether SkillsPromptXML includes active, inactive, or both sets.
+// SkillActivity controls whether SkillsPrompt includes active, inactive, or both sets.
 type SkillActivity string
 
 const (

@@ -1,139 +1,210 @@
-# Agent Skills Runtime for Go
+# AgentSkills Runtime for Go
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-brightgreen.svg)](https://opensource.org/licenses/MIT)
 [![Go Report Card](https://goreportcard.com/badge/github.com/flexigpt/agentskills-go)](https://goreportcard.com/report/github.com/flexigpt/agentskills-go)
 [![lint](https://github.com/flexigpt/agentskills-go/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/flexigpt/agentskills-go/actions/workflows/lint.yml)
 [![test](https://github.com/flexigpt/agentskills-go/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/flexigpt/agentskills-go/actions/workflows/test.yml)
 
-- Runtime + filesystem skill runtime implementation for "AgentSkills" in Go.
-- An "AgentSkill" is a directory/location containing a `SKILL.md` file with YAML frontmatter. Full specification at the official [site](https://agentskills.io/specification).
-- The tools are implemented using the specification and data types provided in [llmtools-go](https://github.com/flexigpt/llmtools-go) repo.
+Runtime for [AgentSkills](https://agentskills.io/specification) in Go with pluggable backend providers for skill lifecycle. Includes a bundled filesystem-backed provider.
 
 ## Table of contents <!-- omit in toc -->
 
-- [Features at a glance](#features-at-a-glance)
+- [Overview](#overview)
+- [Features](#features)
+- [Prompt format](#prompt-format)
 - [Filesystem skill provider](#filesystem-skill-provider)
   - [Quickstart](#quickstart)
-  - [Security model notes (FS provider)](#security-model-notes-fs-provider)
-- [End to end examples](#end-to-end-examples)
+  - [Security notes](#security-notes)
+- [End-to-end examples](#end-to-end-examples)
 - [Development](#development)
 - [License](#license)
 
-## Features at a glance
+## Overview
 
-- A runtime that hosts a catalog of skills and manages _session-scoped active skills_.
+An AgentSkill is a directory or location containing a `SKILL.md` file with YAML frontmatter.
 
-- Progressive disclosure:
-  - the catalog exposes _metadata only_
-  - a session "loads" a skill to disclose its full `SKILL.md` body into the prompt
+This library is built around progressive disclosure of skills for LLM sessions:
 
-- A provider abstraction (`spec.SkillProvider`) and a hardened reference provider:
-  - `providers/fsskillprovider`: skills backed by a local filesystem directory
+- the runtime maintains a catalog of known skills
+- the catalog exposes metadata for discovery
+- a session can activate specific skills
+- only active skills disclose their full `SKILL.md` body into the prompt
 
-- Tool wiring via [`llmtools-go`](https://github.com/flexigpt/llmtools-go):
-  - `skills-load`, `skills-unload`, `skills-readresource`, `skills-runscript`
-  - A runtime prompt API `Runtime.SkillsPromptXML(...)` which can emit:
-    - `<availableSkills>...</availableSkills>`
-    - `<activeSkills>...</activeSkills>`
-    - or a wrapper `<skillsPrompt>...</skillsPrompt>` when both are requested.
+That keeps the base prompt smaller while still allowing the model to discover and load additional skills when needed.
+
+## Features
+
+- Runtime for managing:
+  - skill catalog
+  - session-scoped active skills
+- Provider abstraction via `spec.SkillProvider`
+- Reference provider:
+  - `providers/fsskillprovider`
+- Tool integration via [`llmtools-go`](https://github.com/flexigpt/llmtools-go):
+  - `skills-load`
+  - `skills-unload`
+  - `skills-readresource`
+  - `skills-runscript`
+- Prompt generation APIs for:
+  - available skills
+  - active skills
+  - combined session prompt output
+
+## Prompt format
+
+Prompt output is structured plain text intended for LLM consumption.
+
+It is deliberately not XML. Instead, it uses explicit start and end delimiters plus labeled fields so the model can interpret the structure clearly without paying the overhead of XML encoding.
+
+Current behavior:
+
+- available skills are sorted by prompt-visible `name`, then `location`
+- active skills preserve session active order
+- empty sections render as `(none)`
+- when both sections are requested together, the runtime wraps them in a combined `<<<SKILLS_PROMPT>>> ... <<<END_SKILLS_PROMPT>>>` block
+
+Typical shapes look like this.
+
+Available skills:
+
+```text
+<<<AVAILABLE_SKILLS>>>
+name: hello-skill
+location: /abs/path/to/hello-skill
+description: Says hello
+---
+name: my-skill
+location: /abs/path/to/my-skill
+description: My Skill
+<<<END_AVAILABLE_SKILLS>>>
+```
+
+Active skills:
+
+```text
+<<<ACTIVE_SKILLS>>>
+name: hello-skill
+body:
+# Hello Skill
+
+Use this skill when the user wants a greeting.
+<!-- SKILL SEPARATOR -->
+name: my-skill
+body:
+# My Skill
+
+Use this skill when the user wants to deal with me.
+<<<END_ACTIVE_SKILLS>>>
+```
 
 ## Filesystem skill provider
 
 ### Quickstart
 
-- Create a runtime with the filesystem provider
+Create a runtime with the filesystem provider:
 
-  ```go
-  fsp, _ := fsskillprovider.New() // RunScript disabled by default
+```go
+fsp, _ := fsskillprovider.New() // RunScript disabled by default
 
-  rt, _ := agentskills.New(
-    agentskills.WithProvider(fsp),
-  )
-  ```
+rt, _ := agentskills.New(
+  agentskills.WithProvider(fsp),
+)
+```
 
-- Add a skill to the catalog
+Add a skill to the catalog:
 
-  ```go
-  rec, err := rt.AddSkill(ctx, spec.SkillDef{
-    Type:     "fs",
-    Name:     "hello-skill",
-    // This is base dir containing SKILL.md for "hello-skill".
-    // Typically, base dir name and skill name should match.
-    Location: "/abs/path/to/hello-skill",
-  })
-  _ = rec
-  _ = err
-  ```
+```go
+rec, err := rt.AddSkill(ctx, spec.SkillDef{
+  Type:     "fs",
+  Name:     "hello-skill",
+  Location: "/abs/path/to/hello-skill",
+})
+_ = rec
+_ = err
+```
 
-- Build the “available skills” prompt XML (metadata only)
+Build the available-skills prompt for discovery only:
 
-  ```go
-  xml, _ := rt.SkillsPromptXML(ctx, &agentskills.SkillFilter{
-    Activity: spec.SkillActivityInactive, // with no SessionID: treated as "all skills"
-  })
-  // <availableSkills> ... </availableSkills>
-  ```
+```go
+prompt, _ := rt.SkillsPrompt(ctx, &agentskills.SkillFilter{
+  Activity: spec.SkillActivityInactive, // without SessionID, treated as all known/inactive skills
+})
+_ = prompt
+```
 
-- Create a session with initial active skills (progressive disclosure)
+Create a session with initial active skills:
 
-  ```go
-  sid, active, err := rt.NewSession(ctx,
-    agentskills.WithSessionActiveSkills([]spec.SkillDef{rec.Def}),
-  )
-  _ = sid
-  _ = active // []spec.SkillDef
-  _ = err
-  ```
+```go
+sid, active, err := rt.NewSession(ctx,
+  agentskills.WithSessionActiveSkills([]spec.SkillDef{rec.Def}),
+)
+_ = sid
+_ = active
+_ = err
+```
 
-- Build “active skills” prompt XML
+Build the active-skills prompt for that session:
 
-  ```go
-  activeXML, _ := rt.SkillsPromptXML(ctx, &agentskills.SkillFilter{
-    SessionID: sid,
-    Activity:  spec.SkillActivityActive,
-  })
-  // <activeSkills>
-  //   <skill name="hello-skill"><![CDATA[ ... SKILL.md body ... ]]></skill>
-  // </activeSkills>
-  ```
+```go
+activePrompt, _ := rt.SkillsPrompt(ctx, &agentskills.SkillFilter{
+  SessionID: sid,
+  Activity:  spec.SkillActivityActive,
+})
+_ = activePrompt
+```
 
-- Build a combined prompt (active + available/inactive) for a session
+Build a combined prompt for a session:
 
-  ```go
-  xml, _ := rt.SkillsPromptXML(ctx, &agentskills.SkillFilter{
-    SessionID: sid,
-    Activity:  spec.SkillActivityAny,
-  })
-  // <skillsPrompt>
-  //   <availableSkills>...</availableSkills>
-  //   <activeSkills>...</activeSkills>
-  // </skillsPrompt>
-  ```
+```go
+prompt, _ := rt.SkillsPrompt(ctx, &agentskills.SkillFilter{
+  SessionID: sid,
+  Activity:  spec.SkillActivityAny,
+})
+_ = prompt
+```
 
-- Create a tool registry for an LLM session
+Create a tool registry for an LLM session:
 
-  ```go
-  reg, _ := rt.NewSessionRegistry(ctx, sid)
-  // Registry includes: skills-load / skills-unload / skills-readresource / skills-runscript
-  _ = reg
-  ```
+```go
+reg, _ := rt.NewSessionRegistry(ctx, sid)
+_ = reg
+```
 
-### Security model notes (FS provider)
+The registry includes:
 
-The FS provider is intentionally thin and delegates most sandboxing/hardening to `llmtools-go`:
+- `skills-load`
+- `skills-unload`
+- `skills-readresource`
+- `skills-runscript`
 
-- `skills-readresource` uses `llmtools-go/fstool` and is scoped to the skill root via:
+### Security notes
+
+The filesystem provider is intentionally thin and relies on `llmtools-go` for most of the operational sandboxing boundaries.
+
+- `skills-readresource` uses `llmtools-go/fstool` and is scoped to the skill root with:
   - `allowedRoots = [skillRoot]`
   - `workBaseDir = skillRoot`
 - `skills-runscript` uses `llmtools-go/exectool` and is scoped similarly
-- `RunScript` is disabled by default; enable explicitly via `fsskillprovider.WithRunScripts(true)`
+- script execution is disabled by default
+- enable script execution explicitly with:
 
-## End to end examples
+```go
+fsskillprovider.WithRunScripts(true)
+```
 
-Working end-to-end examples live in:
+## End-to-end examples
+
+Working end-to-end coverage lives in:
 
 - [fs test](./internal/integration/fs_test.go)
-  - Demonstrates: create runtime, add skill, list/prompt, create session with initial actives, run tools.
+
+It demonstrates:
+
+- creating a runtime
+- adding a skill
+- listing and prompting skills
+- creating a session with initial active skills
+- invoking skill tools
 
 ## Development
 

@@ -1,33 +1,31 @@
 package catalog
 
 import (
-	"encoding/xml"
-	"fmt"
 	"sort"
+	"strings"
+)
+
+const (
+	availableSkillsStart         = "<<<AVAILABLE_SKILLS>>>"
+	availableSkillsEnd           = "<<<END_AVAILABLE_SKILLS>>>"
+	activeSkillsStart            = "<<<ACTIVE_SKILLS>>>"
+	activeSkillsEnd              = "<<<END_ACTIVE_SKILLS>>>"
+	nextAvailableSkillsSeparator = "---"
+	nextActiveSkillsSeparator    = "<!-- SKILL SEPARATOR -->"
 )
 
 type AvailableSkillItem struct {
-	Name        string `xml:"name"`
-	Description string `xml:"description"`
-	Location    string `xml:"location"`
-}
-
-type availableSkills struct {
-	XMLName xml.Name             `xml:"availableSkills"` //nolint:tagliatelle // XML specific thing.
-	Skills  []AvailableSkillItem `xml:"skill"`           //nolint:tagliatelle // XML specific thing.
+	Name        string
+	Description string
+	Location    string
 }
 
 type ActiveSkillItem struct {
-	Name string `xml:"name,attr"`
-	Body string `xml:",cdata"` //nolint:tagliatelle // Cannot specify name along with cdata.
+	Name string
+	Body string
 }
 
-type activeSkills struct {
-	XMLName xml.Name          `xml:"activeSkills"` //nolint:tagliatelle // XML specific thing.
-	Skills  []ActiveSkillItem `xml:"skill"`        //nolint:tagliatelle // XML specific thing.
-}
-
-func AvailableSkillsXML(items []AvailableSkillItem) (string, error) {
+func AvailableSkillsPrompt(items []AvailableSkillItem) string {
 	sorted := append([]AvailableSkillItem(nil), items...)
 	sort.Slice(sorted, func(i, j int) bool {
 		if sorted[i].Name == sorted[j].Name {
@@ -36,34 +34,81 @@ func AvailableSkillsXML(items []AvailableSkillItem) (string, error) {
 		return sorted[i].Name < sorted[j].Name
 	})
 
-	out := availableSkills{Skills: make([]AvailableSkillItem, 0, len(sorted))}
-	for _, it := range sorted {
-		out.Skills = append(out.Skills, AvailableSkillItem{
-			Name:        it.Name,
-			Description: it.Description,
-			Location:    it.Location,
-		})
+	var sb strings.Builder
+	sb.WriteString(availableSkillsStart)
+	sb.WriteByte('\n')
+
+	if len(sorted) == 0 {
+		sb.WriteString("(none)\n")
+		sb.WriteString(availableSkillsEnd)
+		return sb.String()
 	}
 
-	b, err := xml.MarshalIndent(out, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("xml encode: %w", err)
+	for idx, it := range sorted {
+		if idx != 0 {
+			sb.WriteString(nextAvailableSkillsSeparator + "\n")
+		}
+
+		sb.WriteString("name: ")
+		sb.WriteString(trimInline(it.Name))
+		sb.WriteByte('\n')
+
+		if it.Location != "" {
+			sb.WriteString("location: ")
+			sb.WriteString(trimInline(it.Location))
+			sb.WriteByte('\n')
+		}
+
+		if it.Description != "" {
+			sb.WriteString("description: ")
+			sb.WriteString(trimInline(it.Description))
+			sb.WriteByte('\n')
+		}
 	}
-	return string(b), nil
+
+	sb.WriteString(availableSkillsEnd)
+	return sb.String()
 }
 
-func ActiveSkillsXML(items []ActiveSkillItem) (string, error) {
-	out := activeSkills{Skills: make([]ActiveSkillItem, 0, len(items))}
-	for _, it := range items {
-		out.Skills = append(out.Skills, ActiveSkillItem{
-			Name: it.Name,
-			Body: it.Body,
-		})
+func ActiveSkillsPrompt(items []ActiveSkillItem) string {
+	var sb strings.Builder
+	sb.WriteString(activeSkillsStart)
+	sb.WriteByte('\n')
+
+	if len(items) == 0 {
+		sb.WriteString("(none)\n")
+		sb.WriteString(activeSkillsEnd)
+		return sb.String()
 	}
 
-	b, err := xml.MarshalIndent(out, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("xml encode: %w", err)
+	for idx, it := range items {
+		if idx != 0 {
+			sb.WriteString(nextActiveSkillsSeparator + "\n")
+		}
+		sb.WriteString("name: ")
+		sb.WriteString(trimInline(it.Name))
+		sb.WriteByte('\n')
+		sb.WriteString("body:\n")
+
+		body := trimTrailingNewlines(it.Body)
+		if body != "" {
+			sb.WriteString(body)
+			sb.WriteByte('\n')
+		}
 	}
-	return string(b), nil
+
+	sb.WriteString(activeSkillsEnd)
+	return sb.String()
+}
+
+func trimInline(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	return s
+}
+
+func trimTrailingNewlines(s string) string {
+	return strings.TrimRight(s, "\r\n")
 }

@@ -72,15 +72,15 @@ func TestRuntime_FSProvider_EndToEnd(t *testing.T) {
 	}
 
 	// Available skills prompt (metadata only).
-	availXML, err := rt.SkillsPromptXML(t.Context(), nil)
+	availPrompt, err := rt.SkillsPrompt(t.Context(), nil)
 	if err != nil {
-		t.Fatalf("available prompt xml: %v", err)
+		t.Fatalf("available prompt %v", err)
 	}
-	if !strings.Contains(availXML, "<availableSkills") {
-		t.Fatalf("expected <availableSkills> xml, got: %s", availXML)
+	if !strings.Contains(availPrompt, "<<<AVAILABLE_SKILLS>>>") {
+		t.Fatalf("expected <<<AVAILABLE_SKILLS>>> prompt, got: %s", availPrompt)
 	}
-	if !strings.Contains(availXML, "<name>hello-skill</name>") {
-		t.Fatalf("expected skill name in xml, got: %s", availXML)
+	if !strings.Contains(availPrompt, "name: hello-skill") {
+		t.Fatalf("expected skill name in prompt, got: %s", availPrompt)
 	}
 
 	// Create session and activate skill (progressive disclosure).
@@ -94,15 +94,15 @@ func TestRuntime_FSProvider_EndToEnd(t *testing.T) {
 		t.Fatalf("expected 1 active handle, got %d", len(handles))
 	}
 
-	activeXML, err := rt.SkillsPromptXML(ctx, &agentskills.SkillFilter{SessionID: sid})
+	activePrompt, err := rt.SkillsPrompt(ctx, &agentskills.SkillFilter{SessionID: sid})
 	if err != nil {
-		t.Fatalf("active prompt xml: %v", err)
+		t.Fatalf("active prompt prompt: %v", err)
 	}
-	if !strings.Contains(activeXML, "<activeSkills") {
-		t.Fatalf("expected <activeSkills> xml, got: %s", activeXML)
+	if !strings.Contains(activePrompt, "<<<ACTIVE_SKILLS>>>") {
+		t.Fatalf("expected <<<ACTIVE_SKILLS>>> prompt, got: %s", activePrompt)
 	}
-	if !strings.Contains(activeXML, "Hello Skill") {
-		t.Fatalf("expected skill body in active xml, got: %s", activeXML)
+	if !strings.Contains(activePrompt, "Hello Skill") {
+		t.Fatalf("expected skill body in active prompt, got: %s", activePrompt)
 	}
 
 	// Registry creation (tool wiring).

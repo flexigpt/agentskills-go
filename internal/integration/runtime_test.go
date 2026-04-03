@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/flexigpt/agentskills-go"
-
 	"github.com/flexigpt/agentskills-go/spec"
 )
 
@@ -83,7 +83,7 @@ func TestNew_RuntimeOptionsValidation(t *testing.T) {
 				pOK := &fakeProvider{typ: "ok"}
 				m := map[string]spec.SkillProvider{"ok": pOK}
 				o := agentskills.WithProvidersByType(m)
-				delete(m, "ok") // should not affect if agentskills.WithProvidersByType snapshots
+				delete(m, "ok")
 				return []agentskills.Option{o}
 			}(),
 			wantErr: "",
@@ -110,12 +110,7 @@ func TestNew_RuntimeOptionsValidation(t *testing.T) {
 
 			if strings.Contains(tt.name, "snapshotted") {
 				got := rt.ProviderTypes()
-				found := false
-				for _, v := range got {
-					if v == "ok" {
-						found = true
-					}
-				}
+				found := slices.Contains(got, "ok")
 				if !found {
 					t.Fatalf("expected ProviderTypes to include %q, got %v", "ok", got)
 				}
@@ -168,9 +163,9 @@ func TestRuntime_NilContext_ReturnsInvalidArgument(t *testing.T) {
 		t.Fatalf("CloseSession(nil ctx): expected ErrInvalidArgument, got %v", err)
 	}
 
-	_, err = rt.SkillsPromptXML(nilCtx, nil)
+	_, err = rt.SkillsPrompt(nilCtx, nil)
 	if !errors.Is(err, spec.ErrInvalidArgument) {
-		t.Fatalf("SkillsPromptXML(nil ctx): expected ErrInvalidArgument, got %v", err)
+		t.Fatalf("SkillsPrompt(nil ctx): expected ErrInvalidArgument, got %v", err)
 	}
 
 	_, err = rt.ListSkills(nilCtx, nil)
@@ -356,7 +351,6 @@ func TestRuntime_NewSession_UnknownActiveDef_ReturnsSkillNotFound(t *testing.T) 
 	t.Cleanup(cancel)
 
 	rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "p"}))
-	// Provider exists, but skill is not in catalog.
 	_, _, err := rt.NewSession(ctx,
 		agentskills.WithSessionActiveSkills([]spec.SkillDef{{Type: "p", Name: "missing", Location: "/missing"}}),
 	)
@@ -478,7 +472,7 @@ func TestRuntime_ListSkills_ActivityAndSessionFilters(t *testing.T) {
 	}
 }
 
-func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
+func TestRuntime_SkillsPrompt_SectionsOrderingAndFiltering(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
@@ -487,7 +481,6 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 	p := &fakeProvider{
 		typ: "p",
 		indexFn: func(ctx context.Context, def spec.SkillDef) (spec.ProviderSkillIndexRecord, error) {
-			// Canonicalize internally (must NOT leak via prompt handle location or lifecycle record.Def).
 			return spec.ProviderSkillIndexRecord{
 				Key: spec.ProviderSkillKey{
 					Type:     def.Type,
@@ -498,7 +491,6 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 			}, nil
 		},
 		loadBodyFn: func(ctx context.Context, key spec.ProviderSkillKey) (string, error) {
-			// Ensure body contains markup + '&' so CDATA is detectable.
 			return "BODY<" + key.Name + ">&", nil
 		},
 	}
@@ -508,7 +500,6 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 		agentskills.WithProvider(p),
 	)
 
-	// Add out of order to validate availableSkills sorting.
 	defB := spec.SkillDef{Type: "p", Name: "b", Location: "/b"}
 	defA := spec.SkillDef{Type: "p", Name: "a", Location: "/a"}
 	defC := spec.SkillDef{Type: "p", Name: "c", Location: "/c"}
@@ -516,71 +507,64 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 	_ = mustAddSkill(t, rt, ctx, defA)
 	_ = mustAddSkill(t, rt, ctx, defC)
 
-	// No session, default (nil filter) => availableSkills root only, sorted by name.
-	xml1, err := rt.SkillsPromptXML(ctx, nil)
+	prompt1, err := rt.SkillsPrompt(ctx, nil)
 	if err != nil {
-		t.Fatalf("SkillsPromptXML: %v", err)
+		t.Fatalf("SkillsPrompt: %v", err)
 	}
-	if gotRoot := xmlRootName(t, xml1); gotRoot != availableSkillsRoot {
-		t.Fatalf("expected root availableSkills, got %q\nxml=%s", gotRoot, xml1)
-	}
-	av1 := mustUnmarshalAvailable(t, xml1)
+	assertStandaloneAvailablePrompt(t, prompt1)
+	assertFirstRecordNotPrefixedBySeparator(t, prompt1, availableSkillsStart, availableSkillsEnd, false)
+
+	av1 := mustParseAvailableSkillsPrompt(t, prompt1)
 	if len(av1.Skills) != 3 {
 		t.Fatalf("expected 3 available skills, got %d", len(av1.Skills))
 	}
 	gotNames := []string{av1.Skills[0].Name, av1.Skills[1].Name, av1.Skills[2].Name}
 	if strings.Join(gotNames, ",") != "a,b,c" {
-		t.Fatalf("expected available sorted by name a,b,c; got %v\nxml=%s", gotNames, xml1)
+		t.Fatalf("expected available sorted by name a,b,c; got %v\nprompt=%s", gotNames, prompt1)
 	}
-	// Location MUST be user-provided (not canonicalized).
 	for _, it := range av1.Skills {
 		if strings.HasPrefix(it.Location, "CANON:") {
 			t.Fatalf(
-				"expected prompt location to be user-provided, got %q (should not start with CANON:)\nxml=%s",
+				"expected prompt location to be user-provided, got %q (should not start with CANON:)\nprompt=%s",
 				it.Location,
-				xml1,
+				prompt1,
 			)
 		}
 	}
 
-	// Create session with initial active skills A then B (order should be preserved).
 	sid, activeDefs := mustNewSession(t, rt, ctx, agentskills.WithSessionActiveSkills([]spec.SkillDef{defA, defB}))
 	t.Cleanup(func() { _ = rt.CloseSession(t.Context(), sid) })
 	if len(activeDefs) != 2 || activeDefs[0] != defA || activeDefs[1] != defB {
 		t.Fatalf("expected NewSession active defs order [A B], got %+v", activeDefs)
 	}
 
-	// ActivityAny + session => skillsPrompt wrapper with both sections.
 	before1 := p.loadBodyCalls.Load()
-	xml2, err := rt.SkillsPromptXML(
+	prompt2, err := rt.SkillsPrompt(
 		ctx,
 		&agentskills.SkillFilter{SessionID: sid, Activity: spec.SkillActivityAny},
 	)
 	if err != nil {
-		t.Fatalf("SkillsPromptXML(any+session): %v", err)
+		t.Fatalf("SkillsPrompt(any+session): %v", err)
 	}
 	after1 := p.loadBodyCalls.Load()
 
-	if gotRoot := xmlRootName(t, xml2); gotRoot != "skillsPrompt" {
-		t.Fatalf("expected root skillsPrompt, got %q\nxml=%s", gotRoot, xml2)
-	}
-	if !strings.Contains(xml2, "<![CDATA[") {
-		t.Fatalf("expected CDATA in activeSkills output\nxml=%s", xml2)
-	}
-	// In CDATA, bodies should appear unescaped.
-	if !strings.Contains(xml2, "BODY<a>&") || !strings.Contains(xml2, "BODY<b>&") {
-		t.Fatalf("expected raw (unescaped) body in CDATA\nxml=%s", xml2)
+	assertWrappedSkillsPrompt(t, prompt2)
+	assertFirstRecordNotPrefixedBySeparator(t, prompt2, availableSkillsStart, availableSkillsEnd, false)
+	assertFirstRecordNotPrefixedBySeparator(t, prompt2, activeSkillsStart, activeSkillsEnd, true)
+
+	if !strings.Contains(prompt2, "BODY<a>&") || !strings.Contains(prompt2, "BODY<b>&") {
+		t.Fatalf("expected raw active bodies in prompt\nprompt=%s", prompt2)
 	}
 
-	// Calling prompt again should not trigger extra LoadBody calls (catalog cache).
-	xml2b, err := rt.SkillsPromptXML(
+	prompt2b, err := rt.SkillsPrompt(
 		ctx,
 		&agentskills.SkillFilter{SessionID: sid, Activity: spec.SkillActivityAny},
 	)
 	if err != nil {
-		t.Fatalf("SkillsPromptXML(any+session) again: %v", err)
+		t.Fatalf("SkillsPrompt(any+session) again: %v", err)
 	}
-	_ = xml2b
+	_ = prompt2b
+
 	after2 := p.loadBodyCalls.Load()
 	if after2 != after1 {
 		t.Fatalf(
@@ -591,63 +575,57 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 		)
 	}
 
-	doc := mustUnmarshalPrompt(t, xml2)
+	doc := mustParseSkillsPromptDocument(t, prompt2)
 	if doc.Active == nil || doc.Available == nil {
-		t.Fatalf("expected both active and available sections present\nxml=%s", xml2)
+		t.Fatalf("expected both active and available sections present\nprompt=%s", prompt2)
 	}
 
-	// Active should be A then B.
 	if len(doc.Active.Skills) != 2 {
-		t.Fatalf("expected 2 active skills, got %d\nxml=%s", len(doc.Active.Skills), xml2)
+		t.Fatalf("expected 2 active skills, got %d\nprompt=%s", len(doc.Active.Skills), prompt2)
 	}
 	if doc.Active.Skills[0].Name != "a" || doc.Active.Skills[1].Name != "b" {
-		t.Fatalf("expected active order [a b], got [%s %s]\nxml=%s",
-			doc.Active.Skills[0].Name, doc.Active.Skills[1].Name, xml2)
+		t.Fatalf("expected active order [a b], got [%s %s]\nprompt=%s",
+			doc.Active.Skills[0].Name, doc.Active.Skills[1].Name, prompt2)
 	}
 	if strings.TrimSpace(doc.Active.Skills[0].Body) != "BODY<a>&" {
-		t.Fatalf("expected active body %q, got %q\nxml=%s", "BODY<a>&", doc.Active.Skills[0].Body, xml2)
+		t.Fatalf("expected active body %q, got %q\nprompt=%s", "BODY<a>&", doc.Active.Skills[0].Body, prompt2)
 	}
 
-	// Available should be only inactive => C.
 	if len(doc.Available.Skills) != 1 || doc.Available.Skills[0].Name != "c" {
-		t.Fatalf("expected available(inactive) to contain only c, got %+v\nxml=%s", doc.Available.Skills, xml2)
+		t.Fatalf("expected available(inactive) to contain only c, got %+v\nprompt=%s", doc.Available.Skills, prompt2)
 	}
 
-	// ActivityActive => activeSkills root only.
-	xml3, err := rt.SkillsPromptXML(
+	prompt3, err := rt.SkillsPrompt(
 		ctx,
 		&agentskills.SkillFilter{SessionID: sid, Activity: spec.SkillActivityActive},
 	)
 	if err != nil {
-		t.Fatalf("SkillsPromptXML(active): %v", err)
+		t.Fatalf("SkillsPrompt(active): %v", err)
 	}
-	if gotRoot := xmlRootName(t, xml3); gotRoot != "activeSkills" {
-		t.Fatalf("expected root activeSkills, got %q\nxml=%s", gotRoot, xml3)
-	}
-	act3 := mustUnmarshalActive(t, xml3)
+	assertStandaloneActivePrompt(t, prompt3)
+	assertFirstRecordNotPrefixedBySeparator(t, prompt3, activeSkillsStart, activeSkillsEnd, true)
+
+	act3 := mustParseActiveSkillsPrompt(t, prompt3)
 	if len(act3.Skills) != 2 {
-		t.Fatalf("expected 2 active skills, got %d\nxml=%s", len(act3.Skills), xml3)
+		t.Fatalf("expected 2 active skills, got %d\nprompt=%s", len(act3.Skills), prompt3)
 	}
 
-	// ActivityInactive => availableSkills root only (inactive skills).
-	xml4, err := rt.SkillsPromptXML(
+	prompt4, err := rt.SkillsPrompt(
 		ctx,
 		&agentskills.SkillFilter{SessionID: sid, Activity: spec.SkillActivityInactive},
 	)
 	if err != nil {
-		t.Fatalf("SkillsPromptXML(inactive): %v", err)
+		t.Fatalf("SkillsPrompt(inactive): %v", err)
 	}
-	if gotRoot := xmlRootName(t, xml4); gotRoot != availableSkillsRoot {
-		t.Fatalf("expected root availableSkills, got %q\nxml=%s", gotRoot, xml4)
-	}
-	av4 := mustUnmarshalAvailable(t, xml4)
+	assertStandaloneAvailablePrompt(t, prompt4)
+	assertFirstRecordNotPrefixedBySeparator(t, prompt4, availableSkillsStart, availableSkillsEnd, false)
+
+	av4 := mustParseAvailableSkillsPrompt(t, prompt4)
 	if len(av4.Skills) != 1 || av4.Skills[0].Name != "c" {
-		t.Fatalf("expected only c inactive, got %+v\nxml=%s", av4.Skills, xml4)
+		t.Fatalf("expected only c inactive, got %+v\nprompt=%s", av4.Skills, prompt4)
 	}
 
-	// AllowSkills filter should apply to both active and available sections.
-	// Allow only C (inactive). Active should become empty, available should contain only C.
-	xml5, err := rt.SkillsPromptXML(ctx, &agentskills.SkillFilter{
+	prompt5, err := rt.SkillsPrompt(ctx, &agentskills.SkillFilter{
 		SessionID:      sid,
 		Activity:       spec.SkillActivityAny,
 		AllowSkills:    []spec.SkillDef{defC},
@@ -656,26 +634,28 @@ func TestRuntime_SkillsPromptXML_RootsSectionsCDATAAndFiltering(t *testing.T) {
 		LocationPrefix: "",
 	})
 	if err != nil {
-		t.Fatalf("SkillsPromptXML(allowSkills): %v", err)
+		t.Fatalf("SkillsPrompt(allowSkills): %v", err)
 	}
-	doc5 := mustUnmarshalPrompt(t, xml5)
+	assertWrappedSkillsPrompt(t, prompt5)
+
+	doc5 := mustParseSkillsPromptDocument(t, prompt5)
 	if doc5.Active == nil || doc5.Available == nil {
-		t.Fatalf("expected both sections in wrapper\nxml=%s", xml5)
+		t.Fatalf("expected both sections in wrapper\nprompt=%s", prompt5)
 	}
 	if len(doc5.Active.Skills) != 0 {
 		t.Fatalf(
-			"expected 0 active skills after allowSkills restriction, got %d\nxml=%s",
+			"expected 0 active skills after allowSkills restriction, got %d\nprompt=%s",
 			len(doc5.Active.Skills),
-			xml5,
+			prompt5,
 		)
 	}
 	if len(doc5.Available.Skills) != 1 || doc5.Available.Skills[0].Name != "c" {
-		t.Fatalf("expected available to contain only c after allowSkills restriction, got %+v\nxml=%s",
-			doc5.Available.Skills, xml5)
+		t.Fatalf("expected available to contain only c after allowSkills restriction, got %+v\nprompt=%s",
+			doc5.Available.Skills, prompt5)
 	}
 }
 
-func TestRuntime_SkillsPromptXML_NamePrefixIsLLMHandleNotHostName(t *testing.T) {
+func TestRuntime_SkillsPrompt_NamePrefixIsLLMHandleNotHostName(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
@@ -685,58 +665,109 @@ func TestRuntime_SkillsPromptXML_NamePrefixIsLLMHandleNotHostName(t *testing.T) 
 	pb := &fakeProvider{typ: "b"}
 	rt := mustNewRuntime(t, agentskills.WithProvider(pa), agentskills.WithProvider(pb))
 
-	// Two skills with the same host name/location but different types must disambiguate at the LLM handle layer.
 	defA := spec.SkillDef{Type: "a", Name: "x", Location: "/same"}
 	defB := spec.SkillDef{Type: "b", Name: "x", Location: "/same"}
 	_ = mustAddSkill(t, rt, ctx, defA)
 	_ = mustAddSkill(t, rt, ctx, defB)
 
-	xmlAll, err := rt.SkillsPromptXML(ctx, &agentskills.SkillFilter{Activity: spec.SkillActivityAny})
+	promptAll, err := rt.SkillsPrompt(ctx, &agentskills.SkillFilter{Activity: spec.SkillActivityAny})
 	if err != nil {
-		t.Fatalf("SkillsPromptXML: %v", err)
+		t.Fatalf("SkillsPrompt: %v", err)
 	}
-	av := mustUnmarshalAvailable(t, xmlAll)
+	av := mustParseAvailableSkillsPrompt(t, promptAll)
 	if len(av.Skills) != 2 {
-		t.Fatalf("expected 2 available skills, got %d\nxml=%s", len(av.Skills), xmlAll)
+		t.Fatalf("expected 2 available skills, got %d\nprompt=%s", len(av.Skills), promptAll)
 	}
 
 	name1 := av.Skills[0].Name
 	name2 := av.Skills[1].Name
 	if name1 == name2 {
-		t.Fatalf("expected distinct LLM-visible handle names, got both=%q\nxml=%s", name1, xmlAll)
+		t.Fatalf("expected distinct LLM-visible handle names, got both=%q\nprompt=%s", name1, promptAll)
 	}
 
-	// Pick a name that is NOT equal to the host name "x" if possible,
-	// so we can prove that ListSkills (host filter) uses host name, not LLM handle name.
 	pick := name1
 	if pick == "x" && name2 != "x" {
 		pick = name2
 	}
 
-	// Prompt NamePrefix uses LLM handle name.
-	xmlOne, err := rt.SkillsPromptXML(
+	promptOne, err := rt.SkillsPrompt(
 		ctx,
 		&agentskills.SkillFilter{NamePrefix: pick, Activity: spec.SkillActivityAny},
 	)
 	if err != nil {
-		t.Fatalf("SkillsPromptXML(NamePrefix=%q): %v", pick, err)
+		t.Fatalf("SkillsPrompt(NamePrefix=%q): %v", pick, err)
 	}
-	avOne := mustUnmarshalAvailable(t, xmlOne)
+	avOne := mustParseAvailableSkillsPrompt(t, promptOne)
 	if len(avOne.Skills) != 1 {
-		t.Fatalf("expected 1 available skill for NamePrefix=%q, got %d\nxml=%s", pick, len(avOne.Skills), xmlOne)
+		t.Fatalf("expected 1 available skill for NamePrefix=%q, got %d\nprompt=%s", pick, len(avOne.Skills), promptOne)
 	}
 	if !strings.HasPrefix(avOne.Skills[0].Name, pick) {
-		t.Fatalf("expected available skill name %q to have prefix %q\nxml=%s", avOne.Skills[0].Name, pick, xmlOne)
+		t.Fatalf("expected available skill name %q to have prefix %q\nprompt=%s", avOne.Skills[0].Name, pick, promptOne)
 	}
 
-	// Host listing NamePrefix uses host def name; using the LLM handle prefix should produce 0
-	// whenever the handle differs from "x".
 	recs, err := rt.ListSkills(ctx, &agentskills.SkillListFilter{NamePrefix: pick})
 	if err != nil {
 		t.Fatalf("ListSkills(NamePrefix=%q): %v", pick, err)
 	}
 	if pick != "x" && len(recs) != 0 {
 		t.Fatalf("expected 0 host records for NamePrefix=%q (LLM handle), got %d: %+v", pick, len(recs), recs)
+	}
+}
+
+func TestRuntime_SkillsPrompt_LocationPrefixUsesUserProvidedLocation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	t.Cleanup(cancel)
+
+	p := &fakeProvider{
+		typ: "p",
+		indexFn: func(ctx context.Context, def spec.SkillDef) (spec.ProviderSkillIndexRecord, error) {
+			return spec.ProviderSkillIndexRecord{
+				Key: spec.ProviderSkillKey{
+					Type:     def.Type,
+					Name:     def.Name,
+					Location: "CANON:" + def.Location,
+				},
+				Description: "desc:" + def.Name,
+			}, nil
+		},
+	}
+
+	rt := mustNewRuntime(t, agentskills.WithProvider(p))
+	def := spec.SkillDef{Type: "p", Name: "skill", Location: "/user/location"}
+	_ = mustAddSkill(t, rt, ctx, def)
+
+	promptUser, err := rt.SkillsPrompt(ctx, &agentskills.SkillFilter{
+		Activity:       spec.SkillActivityAny,
+		LocationPrefix: "/user/",
+	})
+	if err != nil {
+		t.Fatalf("SkillsPrompt(user location prefix): %v", err)
+	}
+	avUser := mustParseAvailableSkillsPrompt(t, promptUser)
+	if len(avUser.Skills) != 1 {
+		t.Fatalf(
+			"expected 1 available skill for user-provided location prefix, got %d\nprompt=%s",
+			len(avUser.Skills),
+			promptUser,
+		)
+	}
+
+	promptCanon, err := rt.SkillsPrompt(ctx, &agentskills.SkillFilter{
+		Activity:       spec.SkillActivityAny,
+		LocationPrefix: "CANON:",
+	})
+	if err != nil {
+		t.Fatalf("SkillsPrompt(canonical location prefix): %v", err)
+	}
+	avCanon := mustParseAvailableSkillsPrompt(t, promptCanon)
+	if len(avCanon.Skills) != 0 {
+		t.Fatalf(
+			"expected 0 available skills for canonicalized location prefix, got %d\nprompt=%s",
+			len(avCanon.Skills),
+			promptCanon,
+		)
 	}
 }
 
@@ -753,36 +784,38 @@ func TestRuntime_RemoveSkill_PrunesFromAllSessions_ReAddDoesNotResurrectActive(t
 	sid, _ := mustNewSession(t, rt, ctx, agentskills.WithSessionActiveSkills([]spec.SkillDef{def}))
 	t.Cleanup(func() { _ = rt.CloseSession(t.Context(), sid) })
 
-	// Remove skill; this should prune from all sessions.
 	if _, err := rt.RemoveSkill(ctx, def); err != nil {
 		t.Fatalf("RemoveSkill: %v", err)
 	}
 
-	// Add it back.
 	_ = mustAddSkill(t, rt, ctx, def)
 
-	// If prune didn't happen, the session would still consider it active after re-add.
-	xmlOut, err := rt.SkillsPromptXML(
+	promptOut, err := rt.SkillsPrompt(
 		ctx,
 		&agentskills.SkillFilter{SessionID: sid, Activity: spec.SkillActivityAny},
 	)
 	if err != nil {
-		t.Fatalf("SkillsPromptXML: %v", err)
+		t.Fatalf("SkillsPrompt: %v", err)
 	}
-	doc := mustUnmarshalPrompt(t, xmlOut)
+	assertWrappedSkillsPrompt(t, promptOut)
 
+	doc := mustParseSkillsPromptDocument(t, promptOut)
 	if doc.Active == nil || doc.Available == nil {
-		t.Fatalf("expected wrapper to contain both sections\nxml=%s", xmlOut)
+		t.Fatalf("expected wrapper to contain both sections\nprompt=%s", promptOut)
 	}
 	if len(doc.Active.Skills) != 0 {
-		t.Fatalf("expected 0 active skills after remove+readd, got %d\nxml=%s", len(doc.Active.Skills), xmlOut)
+		t.Fatalf("expected 0 active skills after remove+readd, got %d\nprompt=%s", len(doc.Active.Skills), promptOut)
 	}
 	if len(doc.Available.Skills) != 1 {
-		t.Fatalf("expected 1 available skill after remove+readd, got %d\nxml=%s", len(doc.Available.Skills), xmlOut)
+		t.Fatalf(
+			"expected 1 available skill after remove+readd, got %d\nprompt=%s",
+			len(doc.Available.Skills),
+			promptOut,
+		)
 	}
 }
 
-func TestRuntime_SkillsPromptXML_Errors(t *testing.T) {
+func TestRuntime_SkillsPrompt_Errors(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
@@ -799,7 +832,7 @@ func TestRuntime_SkillsPromptXML_Errors(t *testing.T) {
 			name: "nil runtime receiver",
 			do: func() error {
 				var nilRT *agentskills.Runtime
-				_, err := nilRT.SkillsPromptXML(ctx, nil)
+				_, err := nilRT.SkillsPrompt(ctx, nil)
 				return err
 			},
 			wantErr: spec.ErrInvalidArgument,
@@ -808,7 +841,7 @@ func TestRuntime_SkillsPromptXML_Errors(t *testing.T) {
 			name: "nil context",
 			do: func() error {
 				var nilCtx context.Context
-				_, err := rt.SkillsPromptXML(nilCtx, nil)
+				_, err := rt.SkillsPrompt(nilCtx, nil)
 				return err
 			},
 			wantErr: spec.ErrInvalidArgument,
@@ -818,7 +851,7 @@ func TestRuntime_SkillsPromptXML_Errors(t *testing.T) {
 			do: func() error {
 				cctx, ccancel := context.WithCancel(ctx)
 				ccancel()
-				_, err := rt.SkillsPromptXML(cctx, nil)
+				_, err := rt.SkillsPrompt(cctx, nil)
 				return err
 			},
 			wantErr: context.Canceled,
@@ -826,7 +859,7 @@ func TestRuntime_SkillsPromptXML_Errors(t *testing.T) {
 		{
 			name: "activity active requires session",
 			do: func() error {
-				_, err := rt.SkillsPromptXML(
+				_, err := rt.SkillsPrompt(
 					ctx,
 					&agentskills.SkillFilter{Activity: spec.SkillActivityActive},
 				)
@@ -837,7 +870,7 @@ func TestRuntime_SkillsPromptXML_Errors(t *testing.T) {
 		{
 			name: "invalid activity",
 			do: func() error {
-				_, err := rt.SkillsPromptXML(
+				_, err := rt.SkillsPrompt(
 					ctx,
 					&agentskills.SkillFilter{Activity: spec.SkillActivity("bad")},
 				)
@@ -848,7 +881,7 @@ func TestRuntime_SkillsPromptXML_Errors(t *testing.T) {
 		{
 			name: "missing session id => ErrSessionNotFound",
 			do: func() error {
-				_, err := rt.SkillsPromptXML(
+				_, err := rt.SkillsPrompt(
 					ctx,
 					&agentskills.SkillFilter{SessionID: "missing", Activity: spec.SkillActivityAny},
 				)
@@ -879,4 +912,256 @@ func TestRuntime_NewSessionRegistry_UnknownSession(t *testing.T) {
 	if !errors.Is(err, spec.ErrSessionNotFound) {
 		t.Fatalf("expected ErrSessionNotFound, got: %v", err)
 	}
+}
+
+type parsedAvailableSkill struct {
+	Name        string
+	Location    string
+	Description string
+}
+
+type parsedAvailablePrompt struct {
+	Skills []parsedAvailableSkill
+}
+
+type parsedActiveSkill struct {
+	Name string
+	Body string
+}
+
+type parsedActivePrompt struct {
+	Skills []parsedActiveSkill
+}
+
+type parsedSkillsPrompt struct {
+	Available *parsedAvailablePrompt
+	Active    *parsedActivePrompt
+}
+
+func assertStandaloneAvailablePrompt(t *testing.T, s string) {
+	t.Helper()
+
+	if !strings.HasPrefix(s, availableSkillsStart) {
+		t.Fatalf("expected available-skills standalone prompt root, got:\n%s", s)
+	}
+	if strings.Contains(s, skillsPromptStart) {
+		t.Fatalf("did not expect combined wrapper in standalone available prompt:\n%s", s)
+	}
+	if strings.Contains(s, activeSkillsStart) {
+		t.Fatalf("did not expect active section in standalone available prompt:\n%s", s)
+	}
+	if !strings.Contains(s, availableSkillsEnd) {
+		t.Fatalf("missing available-skills end delimiter:\n%s", s)
+	}
+}
+
+func assertStandaloneActivePrompt(t *testing.T, s string) {
+	t.Helper()
+
+	if !strings.HasPrefix(s, activeSkillsStart) {
+		t.Fatalf("expected active-skills standalone prompt root, got:\n%s", s)
+	}
+	if strings.Contains(s, skillsPromptStart) {
+		t.Fatalf("did not expect combined wrapper in standalone active prompt:\n%s", s)
+	}
+	if strings.Contains(s, availableSkillsStart) {
+		t.Fatalf("did not expect available section in standalone active prompt:\n%s", s)
+	}
+	if !strings.Contains(s, activeSkillsEnd) {
+		t.Fatalf("missing active-skills end delimiter:\n%s", s)
+	}
+}
+
+func assertWrappedSkillsPrompt(t *testing.T, s string) {
+	t.Helper()
+
+	if !strings.HasPrefix(s, skillsPromptStart) {
+		t.Fatalf("expected combined wrapper start delimiter, got:\n%s", s)
+	}
+	if !strings.Contains(s, skillsPromptEnd) {
+		t.Fatalf("expected combined wrapper end delimiter, got:\n%s", s)
+	}
+	if !strings.Contains(s, availableSkillsStart) || !strings.Contains(s, availableSkillsEnd) {
+		t.Fatalf("expected combined wrapper to contain available section, got:\n%s", s)
+	}
+	if !strings.Contains(s, activeSkillsStart) || !strings.Contains(s, activeSkillsEnd) {
+		t.Fatalf("expected combined wrapper to contain active section, got:\n%s", s)
+	}
+}
+
+func assertFirstRecordNotPrefixedBySeparator(t *testing.T, s, start, end string, isActiveSkill bool) {
+	t.Helper()
+
+	body := mustExtractPromptBlock(t, s, start, end)
+	first := firstNonEmptyLine(body)
+	if first == "" || first == nonePromptString {
+		return
+	}
+	if isActiveSkill && first == nextActiveSkillsSeparator {
+		t.Fatalf("unexpected leading separator after %s:\n%s", start, s)
+	} else if first == nextAvailableSkillsSeparator {
+		t.Fatalf("unexpected leading separator after %s:\n%s", start, s)
+	}
+
+	if !strings.HasPrefix(first, "name: ") {
+		t.Fatalf("expected first content line after %s to begin with %q, got %q\nprompt=%s", start, "name: ", first, s)
+	}
+}
+
+func mustParseSkillsPromptDocument(t *testing.T, s string) parsedSkillsPrompt {
+	t.Helper()
+
+	if strings.Contains(s, skillsPromptStart) {
+		s = mustExtractPromptBlock(t, s, skillsPromptStart, skillsPromptEnd)
+	}
+
+	var doc parsedSkillsPrompt
+	if strings.Contains(s, availableSkillsStart) {
+		av := mustParseAvailableSkillsPrompt(t, s)
+		doc.Available = &av
+	}
+	if strings.Contains(s, activeSkillsStart) {
+		act := mustParseActiveSkillsPrompt(t, s)
+		doc.Active = &act
+	}
+	return doc
+}
+
+func mustParseAvailableSkillsPrompt(t *testing.T, s string) parsedAvailablePrompt {
+	t.Helper()
+
+	body := mustExtractPromptBlock(t, s, availableSkillsStart, availableSkillsEnd)
+	if strings.TrimSpace(body) == "" || strings.TrimSpace(body) == nonePromptString {
+		return parsedAvailablePrompt{}
+	}
+
+	recs := splitPromptRecords(body, false)
+	out := make([]parsedAvailableSkill, 0, len(recs))
+
+	for _, rec := range recs {
+		lines := strings.Split(strings.TrimRight(rec, "\r\n"), "\n")
+		var item parsedAvailableSkill
+
+		for _, line := range lines {
+			switch {
+			case strings.HasPrefix(line, "name: "):
+				item.Name = strings.TrimPrefix(line, "name: ")
+			case strings.HasPrefix(line, "location: "):
+				item.Location = strings.TrimPrefix(line, "location: ")
+			case strings.HasPrefix(line, "description: "):
+				item.Description = strings.TrimPrefix(line, "description: ")
+			default:
+				t.Fatalf("unexpected available-skill line %q in record:\n%s", line, rec)
+			}
+		}
+
+		if item.Name == "" {
+			t.Fatalf("available-skill record missing name:\n%s", rec)
+		}
+
+		out = append(out, item)
+	}
+
+	return parsedAvailablePrompt{Skills: out}
+}
+
+func mustParseActiveSkillsPrompt(t *testing.T, s string) parsedActivePrompt {
+	t.Helper()
+
+	body := mustExtractPromptBlock(t, s, activeSkillsStart, activeSkillsEnd)
+	if strings.TrimSpace(body) == "" || strings.TrimSpace(body) == nonePromptString {
+		return parsedActivePrompt{}
+	}
+
+	recs := splitPromptRecords(body, true)
+	out := make([]parsedActiveSkill, 0, len(recs))
+
+	for _, rec := range recs {
+		lines := strings.Split(strings.TrimRight(rec, "\r\n"), "\n")
+		if len(lines) < 2 {
+			t.Fatalf("active-skill record too short:\n%s", rec)
+		}
+		if !strings.HasPrefix(lines[0], "name: ") {
+			t.Fatalf("active-skill record missing name header:\n%s", rec)
+		}
+		if lines[1] != "body:" {
+			t.Fatalf("active-skill record missing body header:\n%s", rec)
+		}
+
+		item := parsedActiveSkill{
+			Name: strings.TrimPrefix(lines[0], "name: "),
+		}
+		if len(lines) > 2 {
+			item.Body = strings.Join(lines[2:], "\n")
+		}
+
+		out = append(out, item)
+	}
+
+	return parsedActivePrompt{Skills: out}
+}
+
+func mustExtractPromptBlock(t *testing.T, s, start, end string) string {
+	t.Helper()
+
+	startIdx := strings.Index(s, start)
+	if startIdx < 0 {
+		t.Fatalf("missing start delimiter %q in prompt:\n%s", start, s)
+	}
+	startIdx += len(start)
+
+	if startIdx < len(s) && s[startIdx] == '\n' {
+		startIdx++
+	}
+
+	rest := s[startIdx:]
+	before, _, ok := strings.Cut(rest, end)
+	if !ok {
+		t.Fatalf("missing end delimiter %q in prompt:\n%s", end, s)
+	}
+
+	return strings.TrimRight(before, "\r\n")
+}
+
+func splitPromptRecords(body string, isActiveSkill bool) []string {
+	body = strings.TrimRight(body, "\r\n")
+	if body == "" {
+		return nil
+	}
+
+	lines := strings.Split(body, "\n")
+	recs := make([]string, 0, 1)
+	cur := make([]string, 0, len(lines))
+
+	flush := func() {
+		if len(cur) == 0 {
+			return
+		}
+		rec := strings.Join(cur, "\n")
+		if strings.TrimSpace(rec) != "" {
+			recs = append(recs, rec)
+		}
+		cur = nil
+	}
+
+	for _, line := range lines {
+		if (isActiveSkill && line == nextActiveSkillsSeparator) || line == nextAvailableSkillsSeparator {
+			flush()
+			continue
+		}
+
+		cur = append(cur, line)
+	}
+	flush()
+
+	return recs
+}
+
+func firstNonEmptyLine(s string) string {
+	for line := range strings.SplitSeq(strings.ReplaceAll(s, "\r\n", "\n"), "\n") {
+		if strings.TrimSpace(line) != "" {
+			return line
+		}
+	}
+	return ""
 }
