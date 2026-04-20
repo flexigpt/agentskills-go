@@ -1,5 +1,5 @@
-github.com/flexigpt/llmtools-go v0.17.0 h1:28tsjUnD0HsEX/oiRf60lJ7KlOmBzU8eVSHnsDEsxak=
-github.com/flexigpt/llmtools-go v0.17.0/go.mod h1:K/Gdq+WJxkBIr9ykLodM6RL9QUsqCg5mcxEozbZlvDQ=
+github.com/flexigpt/llmtools-go v0.18.0 h1:kFRL1ZyIJH790h2tsYWarOdCCyxWt+iSaxqvQMbqYAw=
+github.com/flexigpt/llmtools-go v0.18.0/go.mod h1:K/Gdq+WJxkBIr9ykLodM6RL9QUsqCg5mcxEozbZlvDQ=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 h1:QwWKgMY28TAXaDl+ExRDqGQltzXqN/xypdKP86niVn8=

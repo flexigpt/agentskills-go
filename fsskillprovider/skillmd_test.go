@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -116,7 +117,7 @@ func TestValidateNameAndDescription(t *testing.T) {
 	}
 
 	for _, tt := range descTests {
-		t.Run("desc_len_"+string(rune(len(tt.in))), func(t *testing.T) {
+		t.Run("desc_len_"+strconv.Itoa(len(tt.in)), func(t *testing.T) {
 			t.Parallel()
 			err := validateDescription(tt.in)
 			if tt.wantErr && err == nil {
