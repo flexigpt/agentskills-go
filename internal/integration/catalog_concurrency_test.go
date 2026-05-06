@@ -26,7 +26,7 @@ type blockingProvider struct {
 	release     chan struct{}
 }
 
-func (p *blockingProvider) Type() string { return "fake" }
+func (p *blockingProvider) Type() string { return fakeStr }
 
 func (p *blockingProvider) Index(ctx context.Context, def spec.SkillDef) (spec.ProviderSkillIndexRecord, error) {
 	return spec.ProviderSkillIndexRecord{
@@ -77,7 +77,7 @@ func TestCatalog_EnsureBody_WaitHonorsContext_AndRemoveDoesNotPanic(t *testing.T
 	cat := catalog.New(fakeResolver{p: p})
 
 	def := spec.SkillDef{
-		Type:     "fake",
+		Type:     fakeStr,
 		Name:     "s",
 		Location: "/x",
 	}

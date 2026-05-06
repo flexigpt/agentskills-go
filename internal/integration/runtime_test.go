@@ -14,6 +14,12 @@ import (
 	"github.com/flexigpt/agentskills-go/spec"
 )
 
+const (
+	fakeStr    = "fake"
+	dupStr     = "dup"
+	missingStr = "missing"
+)
+
 func TestNew_RuntimeOptionsValidation(t *testing.T) {
 	t.Parallel()
 
@@ -35,8 +41,8 @@ func TestNew_RuntimeOptionsValidation(t *testing.T) {
 		{
 			name: "duplicate provider type via agentskills.WithProvider",
 			opts: []agentskills.Option{
-				agentskills.WithProvider(&fakeProvider{typ: "dup"}),
-				agentskills.WithProvider(&fakeProvider{typ: "dup"}),
+				agentskills.WithProvider(&fakeProvider{typ: dupStr}),
+				agentskills.WithProvider(&fakeProvider{typ: dupStr}),
 			},
 			wantErr: "duplicate provider type",
 		},
@@ -227,7 +233,7 @@ func TestRuntime_AddSkill_RemoveSkill_Errors(t *testing.T) {
 			do: func() error {
 				rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "p"}))
 				_, err := rt.AddSkill(ctx, spec.SkillDef{
-					Type:     "missing",
+					Type:     missingStr,
 					Name:     "s",
 					Location: "/x",
 				})
@@ -252,7 +258,7 @@ func TestRuntime_AddSkill_RemoveSkill_Errors(t *testing.T) {
 			name: "AddSkill duplicate",
 			do: func() error {
 				rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "p"}))
-				def := spec.SkillDef{Type: "p", Name: "dup", Location: "/d"}
+				def := spec.SkillDef{Type: "p", Name: dupStr, Location: "/d"}
 				if _, err := rt.AddSkill(ctx, def); err != nil {
 					return err
 				}
@@ -302,7 +308,7 @@ func TestRuntime_NewSession_InitialActiveSkills_ReturnsExactlyProvidedDefs(t *te
 	t.Cleanup(cancel)
 
 	rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "p"}))
-	def := spec.SkillDef{Type: "p", Name: "s1", Location: "/p1"}
+	def := spec.SkillDef{Type: "p", Name: "s1", Location: "/pw1"}
 	_ = mustAddSkill(t, rt, ctx, def)
 
 	_, active := mustNewSession(t, rt, ctx, agentskills.WithSessionActiveSkills([]spec.SkillDef{def}))
@@ -316,7 +322,7 @@ func TestRuntime_NewSession_InitialActiveSkills_DuplicateDefErrors(t *testing.T)
 	t.Cleanup(cancel)
 
 	rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "p"}))
-	def := spec.SkillDef{Type: "p", Name: "s1", Location: "/p1"}
+	def := spec.SkillDef{Type: "p", Name: "s1", Location: "/pz1"}
 	_ = mustAddSkill(t, rt, ctx, def)
 
 	_, _, err := rt.NewSession(ctx, agentskills.WithSessionActiveSkills([]spec.SkillDef{def, def}))
@@ -352,7 +358,7 @@ func TestRuntime_NewSession_UnknownActiveDef_ReturnsSkillNotFound(t *testing.T) 
 
 	rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "p"}))
 	_, _, err := rt.NewSession(ctx,
-		agentskills.WithSessionActiveSkills([]spec.SkillDef{{Type: "p", Name: "missing", Location: "/missing"}}),
+		agentskills.WithSessionActiveSkills([]spec.SkillDef{{Type: "p", Name: missingStr, Location: "/missing"}}),
 	)
 	if !errors.Is(err, spec.ErrSkillNotFound) {
 		t.Fatalf("expected ErrSkillNotFound, got %v", err)
@@ -419,7 +425,7 @@ func TestRuntime_ListSkills_ActivityAndSessionFilters(t *testing.T) {
 		{
 			name: "session missing => ErrSessionNotFound",
 			filter: &agentskills.SkillListFilter{
-				SessionID: spec.SessionID("missing"),
+				SessionID: spec.SessionID(missingStr),
 				Activity:  spec.SkillActivityAny,
 			},
 			wantErr: spec.ErrSessionNotFound,
@@ -883,7 +889,7 @@ func TestRuntime_SkillsPrompt_Errors(t *testing.T) {
 			do: func() error {
 				_, err := rt.SkillsPrompt(
 					ctx,
-					&agentskills.SkillFilter{SessionID: "missing", Activity: spec.SkillActivityAny},
+					&agentskills.SkillFilter{SessionID: missingStr, Activity: spec.SkillActivityAny},
 				)
 				return err
 			},
@@ -906,9 +912,9 @@ func TestRuntime_SkillsPrompt_Errors(t *testing.T) {
 func TestRuntime_NewSessionRegistry_UnknownSession(t *testing.T) {
 	t.Parallel()
 
-	rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: "fake"}))
+	rt := mustNewRuntime(t, agentskills.WithProvider(&fakeProvider{typ: fakeStr}))
 
-	_, err := rt.NewSessionRegistry(t.Context(), "missing")
+	_, err := rt.NewSessionRegistry(t.Context(), missingStr)
 	if !errors.Is(err, spec.ErrSessionNotFound) {
 		t.Fatalf("expected ErrSessionNotFound, got: %v", err)
 	}

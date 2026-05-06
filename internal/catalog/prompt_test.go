@@ -8,6 +8,11 @@ import (
 	"github.com/flexigpt/agentskills-go/spec"
 )
 
+const (
+	skillNameAlpha   = "alpha"
+	skillNameCollide = "collide"
+)
+
 func TestPromptFilterAndUserFilter_MatchNilEntry(t *testing.T) {
 	t.Parallel()
 
@@ -29,10 +34,10 @@ func TestCatalog_ListPromptIndexRecords_FiltersAndSorts(t *testing.T) {
 	// Include a collision pair to exercise llmName prefix filtering.
 	defs := []spec.SkillDef{
 		{Type: "a", Name: "zeta", Location: "/2"},
-		{Type: "a", Name: "alpha", Location: "/9"},
-		{Type: "a", Name: "alpha", Location: "/1"},
-		{Type: "a", Name: "collide", Location: "/c"},
-		{Type: "b", Name: "collide", Location: "/c"},
+		{Type: "a", Name: skillNameAlpha, Location: "/9"},
+		{Type: "a", Name: skillNameAlpha, Location: "/1"},
+		{Type: "a", Name: skillNameCollide, Location: "/c"},
+		{Type: "b", Name: skillNameCollide, Location: "/c"},
 	}
 	for _, d := range defs {
 		if _, err := c.Add(t.Context(), d); err != nil {
@@ -65,12 +70,12 @@ func TestCatalog_ListPromptIndexRecords_FiltersAndSorts(t *testing.T) {
 	if len(onlyB) != 1 {
 		t.Fatalf("expected 1 record for type=b, got %d", len(onlyB))
 	}
-	if onlyB[0].Key.Type != "b" || onlyB[0].Key.Name != "collide" {
+	if onlyB[0].Key.Type != "b" || onlyB[0].Key.Name != skillNameCollide {
 		t.Fatalf("unexpected record for type=b: %+v", onlyB[0])
 	}
 
-	// LLMNamePrefix filter: ensure "collide" skills have llmName starting with "collide#".
-	keyA, ok := c.ResolveDef(spec.SkillDef{Type: "a", Name: "collide", Location: "/c"})
+	// LLMNamePrefix filter: ensure skillNameCollide skills have llmName starting with "collide#".
+	keyA, ok := c.ResolveDef(spec.SkillDef{Type: "a", Name: skillNameCollide, Location: "/c"})
 	if !ok {
 		t.Fatalf("ResolveDef(a/collide) failed")
 	}
@@ -95,7 +100,7 @@ func TestCatalog_ListPromptIndexRecords_FiltersAndSorts(t *testing.T) {
 
 	// AllowDefs filter (exact host/lifecycle defs).
 	allow := []spec.SkillDef{
-		{Type: "a", Name: "alpha", Location: "/1"},
+		{Type: "a", Name: skillNameAlpha, Location: "/1"},
 		{Type: "a", Name: "zeta", Location: "/2"},
 	}
 	allowed := c.ListPromptIndexRecords(PromptFilter{AllowDefs: allow})

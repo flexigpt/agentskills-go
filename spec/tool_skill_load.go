@@ -9,10 +9,10 @@ func SkillsLoadTool() llmtoolsgoSpec.Tool {
 		SchemaVersion: llmtoolsgoSpec.SchemaVersion,
 		ID:            "019c4188-4db4-7ad8-bdd0-4126aa1fee00",
 		Slug:          "skills-load",
-		Version:       "v1.0.0",
+		Version:       toolVersionOne,
 		DisplayName:   "Skills Load",
 		Description:   "load one or more skills into the current session",
-		Tags:          []string{"skills"},
+		Tags:          []string{toolTagSkills},
 		ArgSchema: llmtoolsgoSpec.JSONSchema(`{
 "$schema":"http://json-schema.org/draft-07/schema#",
 "type":"object",

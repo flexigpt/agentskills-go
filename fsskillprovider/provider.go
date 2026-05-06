@@ -16,11 +16,16 @@ import (
 	"github.com/flexigpt/agentskills-go/spec"
 )
 
-const Type = "fs"
+const (
+	Type   = "fs"
+	extPy  = ".py"
+	extSh  = ".sh"
+	extPs1 = ".ps1"
+)
 
 var (
-	defaultAllowedScriptsExtensionWin    = []string{".ps1", ".py"}
-	defaultAllowedScriptsExtensionNonWin = []string{".sh", ".py"}
+	defaultAllowedScriptsExtensionWin    = []string{extPs1, extPy}
+	defaultAllowedScriptsExtensionNonWin = []string{extSh, extPy}
 )
 
 type userLocationError struct {

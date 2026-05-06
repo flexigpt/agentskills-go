@@ -12,6 +12,11 @@ import (
 	"github.com/flexigpt/agentskills-go/spec"
 )
 
+const (
+	sameSkillName     = "same"
+	canonicalLocation = "/CANONICAL/LOCATION"
+)
+
 func TestCatalog_Add_ValidationAndProviderErrors(t *testing.T) {
 	t.Parallel()
 
@@ -216,8 +221,8 @@ func TestCatalog_Handles_DisambiguateOnNameAndUserLocationCollision_AndResolve(t
 	pb := &testProvider{typ: "b"}
 	c := New(mapResolver{"a": pa, "b": pb})
 
-	defA := spec.SkillDef{Type: "a", Name: "same", Location: "/p"}
-	defB := spec.SkillDef{Type: "b", Name: "same", Location: "/p"}
+	defA := spec.SkillDef{Type: "a", Name: sameSkillName, Location: "/p"}
+	defB := spec.SkillDef{Type: "b", Name: sameSkillName, Location: "/p"}
 
 	if _, err := c.Add(t.Context(), defA); err != nil {
 		t.Fatalf("Add A: %v", err)
@@ -277,13 +282,13 @@ func TestCatalog_HandleForKey_DoesNotLeakCanonicalLocation(t *testing.T) {
 		indexFn: func(ctx context.Context, def spec.SkillDef) (spec.ProviderSkillIndexRecord, error) {
 			// Canonical location differs from user-provided def.Location.
 			return spec.ProviderSkillIndexRecord{
-				Key:         spec.ProviderSkillKey{Type: def.Type, Name: def.Name, Location: "/CANONICAL/LOCATION"},
+				Key:         spec.ProviderSkillKey{Type: def.Type, Name: def.Name, Location: canonicalLocation},
 				Description: "x",
 			}, nil
 		},
 		loadBodyFn: func(ctx context.Context, key spec.ProviderSkillKey) (string, error) {
 			// EnsureBody must pass the canonical key to providers.
-			if key.Location != "/CANONICAL/LOCATION" {
+			if key.Location != canonicalLocation {
 				return "", errors.New("expected canonical key.location")
 			}
 			return "OK", nil
@@ -301,7 +306,7 @@ func TestCatalog_HandleForKey_DoesNotLeakCanonicalLocation(t *testing.T) {
 	if !ok {
 		t.Fatalf("ResolveDef failed")
 	}
-	if key.Location != "/CANONICAL/LOCATION" {
+	if key.Location != canonicalLocation {
 		t.Fatalf("expected canonical key location from ResolveDef, got %+v", key)
 	}
 
@@ -330,8 +335,8 @@ func TestCatalog_Remove_RecomputesLLMNamesAndIndexes(t *testing.T) {
 	c := New(mapResolver{"a": pa, "b": pb})
 
 	// Collide by (name, user location) => both get "#<hash>".
-	defA := spec.SkillDef{Type: "a", Name: "same", Location: "/p"}
-	defB := spec.SkillDef{Type: "b", Name: "same", Location: "/p"}
+	defA := spec.SkillDef{Type: "a", Name: sameSkillName, Location: "/p"}
+	defB := spec.SkillDef{Type: "b", Name: sameSkillName, Location: "/p"}
 
 	if _, err := c.Add(t.Context(), defA); err != nil {
 		t.Fatalf("Add A: %v", err)
@@ -353,7 +358,7 @@ func TestCatalog_Remove_RecomputesLLMNamesAndIndexes(t *testing.T) {
 		t.Fatalf("expected disambiguated name before removal, got %+v", oldHB)
 	}
 
-	// Remove A: B should revert to plain "same" (no collision group anymore).
+	// Remove A: B should revert to plain sameSkillName (no collision group anymore).
 	rec, removedKey, ok := c.Remove(defA)
 	if !ok {
 		t.Fatalf("Remove(A) expected ok=true")
@@ -361,7 +366,7 @@ func TestCatalog_Remove_RecomputesLLMNamesAndIndexes(t *testing.T) {
 	if rec.Def != defA {
 		t.Fatalf("Remove(A) returned wrong record: got %+v want %+v", rec.Def, defA)
 	}
-	if removedKey.Type != "a" || removedKey.Name != "same" {
+	if removedKey.Type != "a" || removedKey.Name != sameSkillName {
 		t.Fatalf("unexpected removed canonical key: %+v", removedKey)
 	}
 
@@ -369,7 +374,7 @@ func TestCatalog_Remove_RecomputesLLMNamesAndIndexes(t *testing.T) {
 	if !ok {
 		t.Fatalf("HandleForKey(B) after removal failed")
 	}
-	if newHB.Name != "same" || newHB.Location != "/p" {
+	if newHB.Name != sameSkillName || newHB.Location != "/p" {
 		t.Fatalf("expected reverted handle after removal, got %+v", newHB)
 	}
 

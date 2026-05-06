@@ -9,10 +9,10 @@ func SkillsReadResourceTool() llmtoolsgoSpec.Tool {
 		SchemaVersion: llmtoolsgoSpec.SchemaVersion,
 		ID:            "019c4188-73e6-7301-8d3d-28a5d9e23f9e",
 		Slug:          "skills-readresource",
-		Version:       "v1.0.0",
+		Version:       toolVersionOne,
 		DisplayName:   "Skills Read Resource",
 		Description:   "read a skill-scoped resource relative to an active skill base location",
-		Tags:          []string{"skills"},
+		Tags:          []string{toolTagSkills},
 		ArgSchema: llmtoolsgoSpec.JSONSchema(`{
 "$schema":"http://json-schema.org/draft-07/schema#",
 "type":"object",

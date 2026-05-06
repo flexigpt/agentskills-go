@@ -131,7 +131,7 @@ func TestTools_toolLoad_ValidationsAndActivation(t *testing.T) {
 		},
 		{
 			name: "rejects_invalid_mode",
-			args: spec.LoadArgs{Skills: []spec.SkillHandle{h1}, Mode: spec.LoadMode("nope")},
+			args: spec.LoadArgs{Skills: []spec.SkillHandle{h1}, Mode: spec.LoadMode(nopeStr)},
 			isErr: func(err error) bool {
 				return errors.Is(err, spec.ErrInvalidArgument)
 			},
@@ -144,8 +144,8 @@ func TestTools_toolLoad_ValidationsAndActivation(t *testing.T) {
 			},
 		},
 		{
-			name: "unknown_handle",
-			args: spec.LoadArgs{Skills: []spec.SkillHandle{{Name: "nope", Location: "x"}}},
+			name: unknownHandleStr,
+			args: spec.LoadArgs{Skills: []spec.SkillHandle{{Name: nopeStr, Location: "x"}}},
 			isErr: func(err error) bool {
 				return errors.Is(err, spec.ErrSkillNotFound)
 			},
@@ -264,8 +264,8 @@ func TestTools_toolUnload_ValidationsAndBehavior(t *testing.T) {
 			},
 		},
 		{
-			name: "unknown_handle",
-			args: spec.UnloadArgs{Skills: []spec.SkillHandle{{Name: "nope", Location: "x"}}},
+			name: unknownHandleStr,
+			args: spec.UnloadArgs{Skills: []spec.SkillHandle{{Name: nopeStr, Location: "x"}}},
 			isErr: func(err error) bool {
 				return errors.Is(err, spec.ErrSkillNotFound)
 			},
@@ -323,8 +323,8 @@ func TestTools_toolUnload_ValidationsAndBehavior(t *testing.T) {
 
 func TestTools_toolRead_Validations_DefaultEncoding_CanonicalKeyPassedToProvider(t *testing.T) {
 	// Canonical internal key uses abs, LLM-facing handle uses rel.
-	k := spec.ProviderSkillKey{Type: "t", Name: "a", Location: "abs"}
-	h := spec.SkillHandle{Name: "a", Location: "rel"}
+	k := spec.ProviderSkillKey{Type: "t", Name: "a", Location: absStr}
+	h := spec.SkillHandle{Name: "a", Location: relStr}
 
 	cat := newMemCatalog()
 	cat.addWithHandle(k, h, "ok")
@@ -359,21 +359,21 @@ func TestTools_toolRead_Validations_DefaultEncoding_CanonicalKeyPassedToProvider
 		},
 		{
 			name: "rejects_missing_resource_location",
-			args: spec.ReadResourceArgs{SkillName: "a", SkillLocation: "rel", ResourceLocation: ""},
+			args: spec.ReadResourceArgs{SkillName: "a", SkillLocation: relStr, ResourceLocation: ""},
 			isErr: func(err error) bool {
 				return errors.Is(err, spec.ErrInvalidArgument)
 			},
 		},
 		{
-			name: "unknown_handle",
-			args: spec.ReadResourceArgs{SkillName: "nope", SkillLocation: "x", ResourceLocation: "r"},
+			name: unknownHandleStr,
+			args: spec.ReadResourceArgs{SkillName: nopeStr, SkillLocation: "x", ResourceLocation: "r"},
 			isErr: func(err error) bool {
 				return errors.Is(err, spec.ErrSkillNotFound)
 			},
 		},
 		{
 			name: "not_active",
-			args: spec.ReadResourceArgs{SkillName: "a", SkillLocation: "rel", ResourceLocation: "r"},
+			args: spec.ReadResourceArgs{SkillName: "a", SkillLocation: relStr, ResourceLocation: "r"},
 			check: func(t *testing.T) {
 				t.Helper()
 				if _, err := s.toolUnload(t.Context(), spec.UnloadArgs{All: true}); err != nil {
@@ -386,7 +386,7 @@ func TestTools_toolRead_Validations_DefaultEncoding_CanonicalKeyPassedToProvider
 		},
 		{
 			name: "provider_not_found",
-			args: spec.ReadResourceArgs{SkillName: "a", SkillLocation: "rel", ResourceLocation: "r"},
+			args: spec.ReadResourceArgs{SkillName: "a", SkillLocation: relStr, ResourceLocation: "r"},
 			check: func(t *testing.T) {
 				t.Helper()
 				// Re-activate then remove provider.
@@ -403,7 +403,7 @@ func TestTools_toolRead_Validations_DefaultEncoding_CanonicalKeyPassedToProvider
 			name: "success_default_encoding_and_canonical_key_passed",
 			args: spec.ReadResourceArgs{
 				SkillName:        "a",
-				SkillLocation:    "rel",
+				SkillLocation:    relStr,
 				ResourceLocation: "x.txt",
 				Encoding:         spec.ReadResourceEncoding(""), // default => text
 			},
@@ -420,7 +420,7 @@ func TestTools_toolRead_Validations_DefaultEncoding_CanonicalKeyPassedToProvider
 			name: "success_explicit_binary_encoding",
 			args: spec.ReadResourceArgs{
 				SkillName:        "a",
-				SkillLocation:    "rel",
+				SkillLocation:    relStr,
 				ResourceLocation: "y.bin",
 				Encoding:         spec.ReadResourceEncodingBinary,
 			},
@@ -465,8 +465,8 @@ func TestTools_toolRead_Validations_DefaultEncoding_CanonicalKeyPassedToProvider
 }
 
 func TestTools_toolRunScript_Validations_ArgsEnvWorkDirPassed(t *testing.T) {
-	k := spec.ProviderSkillKey{Type: "t", Name: "a", Location: "abs"}
-	h := spec.SkillHandle{Name: "a", Location: "rel"}
+	k := spec.ProviderSkillKey{Type: "t", Name: "a", Location: absStr}
+	h := spec.SkillHandle{Name: "a", Location: relStr}
 
 	cat := newMemCatalog()
 	cat.addWithHandle(k, h, "ok")
@@ -486,6 +486,7 @@ func TestTools_toolRunScript_Validations_ArgsEnvWorkDirPassed(t *testing.T) {
 		t.Fatalf("toolLoad: %v", err)
 	}
 
+	slocation := "s.sh"
 	cases := []struct {
 		name  string
 		args  spec.RunScriptArgs
@@ -494,28 +495,28 @@ func TestTools_toolRunScript_Validations_ArgsEnvWorkDirPassed(t *testing.T) {
 	}{
 		{
 			name: "rejects_missing_skill_fields",
-			args: spec.RunScriptArgs{SkillName: "", SkillLocation: "x", ScriptLocation: "s.sh"},
+			args: spec.RunScriptArgs{SkillName: "", SkillLocation: "x", ScriptLocation: slocation},
 			isErr: func(err error) bool {
 				return errors.Is(err, spec.ErrInvalidArgument)
 			},
 		},
 		{
 			name: "rejects_missing_script_location",
-			args: spec.RunScriptArgs{SkillName: "a", SkillLocation: "rel", ScriptLocation: ""},
+			args: spec.RunScriptArgs{SkillName: "a", SkillLocation: relStr, ScriptLocation: ""},
 			isErr: func(err error) bool {
 				return errors.Is(err, spec.ErrInvalidArgument)
 			},
 		},
 		{
-			name: "unknown_handle",
-			args: spec.RunScriptArgs{SkillName: "nope", SkillLocation: "x", ScriptLocation: "s.sh"},
+			name: unknownHandleStr,
+			args: spec.RunScriptArgs{SkillName: nopeStr, SkillLocation: "x", ScriptLocation: slocation},
 			isErr: func(err error) bool {
 				return errors.Is(err, spec.ErrSkillNotFound)
 			},
 		},
 		{
 			name: "not_active",
-			args: spec.RunScriptArgs{SkillName: "a", SkillLocation: "rel", ScriptLocation: "s.sh"},
+			args: spec.RunScriptArgs{SkillName: "a", SkillLocation: relStr, ScriptLocation: slocation},
 			check: func(t *testing.T) {
 				t.Helper()
 				if _, err := s.toolUnload(t.Context(), spec.UnloadArgs{All: true}); err != nil {
@@ -528,7 +529,7 @@ func TestTools_toolRunScript_Validations_ArgsEnvWorkDirPassed(t *testing.T) {
 		},
 		{
 			name: "provider_not_found",
-			args: spec.RunScriptArgs{SkillName: "a", SkillLocation: "rel", ScriptLocation: "s.sh"},
+			args: spec.RunScriptArgs{SkillName: "a", SkillLocation: relStr, ScriptLocation: slocation},
 			check: func(t *testing.T) {
 				t.Helper()
 				if _, err := s.toolLoad(t.Context(), spec.LoadArgs{Skills: []spec.SkillHandle{h}}); err != nil {
@@ -544,7 +545,7 @@ func TestTools_toolRunScript_Validations_ArgsEnvWorkDirPassed(t *testing.T) {
 			name: "success_args_env_workdir_and_canonical_key_passed",
 			args: spec.RunScriptArgs{
 				SkillName:      "a",
-				SkillLocation:  "rel",
+				SkillLocation:  relStr,
 				ScriptLocation: "scripts/x.sh",
 				Args:           []string{"1", "2"},
 				Env:            map[string]string{"K": "V"},

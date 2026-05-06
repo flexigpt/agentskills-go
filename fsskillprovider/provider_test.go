@@ -10,6 +10,8 @@ import (
 	"github.com/flexigpt/agentskills-go/spec"
 )
 
+const helloSkillName = "hello-skill"
+
 func TestCanonicalRoot(t *testing.T) {
 	t.Parallel()
 
@@ -59,7 +61,7 @@ func TestProvider_IndexAndLoadBody(t *testing.T) {
 	t.Parallel()
 
 	tmp := t.TempDir()
-	root := filepath.Join(tmp, "hello-skill")
+	root := filepath.Join(tmp, helloSkillName)
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -78,7 +80,7 @@ func TestProvider_IndexAndLoadBody(t *testing.T) {
 
 	_, err = p.Index(
 		t.Context(),
-		spec.SkillDef{Type: "wrong", Name: "hello-skill", Location: root},
+		spec.SkillDef{Type: "wrong", Name: helloSkillName, Location: root},
 	)
 	if err == nil || !errors.Is(err, spec.ErrInvalidArgument) {
 		t.Fatalf("expected invalid argument for wrong type, got %v", err)
@@ -86,7 +88,7 @@ func TestProvider_IndexAndLoadBody(t *testing.T) {
 
 	rec, err := p.Index(
 		t.Context(),
-		spec.SkillDef{Type: Type, Name: "hello-skill", Location: root},
+		spec.SkillDef{Type: Type, Name: helloSkillName, Location: root},
 	)
 	if err != nil {
 		t.Fatalf("Index: %v", err)
@@ -108,7 +110,7 @@ func TestProvider_RunScriptDisabled(t *testing.T) {
 	t.Parallel()
 
 	tmp := t.TempDir()
-	root := filepath.Join(tmp, "hello-skill")
+	root := filepath.Join(tmp, helloSkillName)
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -127,7 +129,7 @@ func TestProvider_RunScriptDisabled(t *testing.T) {
 
 	_, err = p.RunScript(
 		t.Context(),
-		spec.ProviderSkillKey{Type: Type, Name: "hello-skill", Location: root},
+		spec.ProviderSkillKey{Type: Type, Name: helloSkillName, Location: root},
 		"scripts/x.sh",
 		nil,
 		nil,
@@ -148,7 +150,7 @@ func TestWithAllowedScriptExtensions_Normalizes(t *testing.T) {
 
 	// Internal field access (same package): verify normalization occurred.
 	got := strings.Join(p.runScriptPolicy.AllowedExtensions, ",")
-	for _, want := range []string{".py", ".sh", ".txt", ".go"} {
+	for _, want := range []string{extPy, extSh, ".txt", ".go"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected %q in AllowedExtensions, got %q", want, got)
 		}

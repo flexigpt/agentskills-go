@@ -23,4 +23,7 @@ const (
 	SkillsRulesPromptWithoutRunScript = skillsToolsBase + "\n" + skillsRulesCommon
 
 	SkillsRulesPromptAll = skillsToolsAllWithRunScript + "\n" + skillsRulesCommon
+
+	toolTagSkills  = "skills"
+	toolVersionOne = "v1.0.0"
 )

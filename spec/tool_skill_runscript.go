@@ -9,10 +9,10 @@ func SkillsRunScriptTool() llmtoolsgoSpec.Tool {
 		SchemaVersion: llmtoolsgoSpec.SchemaVersion,
 		ID:            "019c4188-ac5a-7e5c-8e68-b22e897c4885",
 		Slug:          "skills-runscript",
-		Version:       "v1.0.0",
+		Version:       toolVersionOne,
 		DisplayName:   "Skills Run Script",
 		Description:   "execute a script from within the selected active skill",
-		Tags:          []string{"skills", "exec"},
+		Tags:          []string{toolTagSkills, "exec"},
 		ArgSchema: llmtoolsgoSpec.JSONSchema(`{
 "$schema":"http://json-schema.org/draft-07/schema#",
 "type":"object",

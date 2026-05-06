@@ -10,6 +10,13 @@ import (
 	llmtoolsgoSpec "github.com/flexigpt/llmtools-go/spec"
 )
 
+const (
+	relStr           = "rel"
+	absStr           = "abs"
+	nopeStr          = "nope"
+	unknownHandleStr = "unknown_handle"
+)
+
 type mapResolver map[string]spec.SkillProvider
 
 func (r mapResolver) Provider(skillType string) (spec.SkillProvider, bool) {
@@ -95,7 +102,7 @@ func (c *memCatalog) addWithHandle(k spec.ProviderSkillKey, h spec.SkillHandle, 
 
 type canonProvider struct {
 	typ string
-	// If def.Location == "rel", normalize to "abs".
+	// If def.Location == relStr, normalize to absStr.
 }
 
 func (p *canonProvider) Type() string { return p.typ }
@@ -106,8 +113,8 @@ func (p *canonProvider) Index(ctx context.Context, def spec.SkillDef) (spec.Prov
 	}
 
 	key := spec.ProviderSkillKey(def)
-	if key.Location == "rel" {
-		key.Location = "abs"
+	if key.Location == relStr {
+		key.Location = absStr
 	}
 
 	if strings.TrimSpace(key.Type) == "" || strings.TrimSpace(key.Name) == "" || strings.TrimSpace(key.Location) == "" {
