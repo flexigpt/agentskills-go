@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	"github.com/flexigpt/agentskills-go/spec"
-	"gopkg.in/yaml.v3"
+	"github.com/goccy/go-yaml"
 )
 
 const (
