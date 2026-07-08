@@ -21,6 +21,8 @@ const (
 	extPy  = ".py"
 	extSh  = ".sh"
 	extPs1 = ".ps1"
+
+	goosWindows = "windows"
 )
 
 var (
@@ -386,4 +388,4 @@ func canonicalRoot(p string) (string, error) {
 	return abs, nil
 }
 
-func isWindows() bool { return runtime.GOOS == "windows" }
+func isWindows() bool { return runtime.GOOS == goosWindows }

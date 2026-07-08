@@ -259,7 +259,7 @@ func TestReadAllLimitedAndDigest_SizeCap(t *testing.T) {
 func TestIndexSkillDir_DisallowSymlink(t *testing.T) {
 	t.Parallel()
 
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == goosWindows {
 		// Symlink creation often requires elevated privileges; skip to avoid flakiness.
 		t.Skip("skip symlink test on windows")
 	}
