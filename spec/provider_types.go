@@ -85,11 +85,24 @@ type ProviderSkillKey struct {
 // ProviderSkillIndexRecord is the INTERNAL catalog record returned by providers during indexing.
 // It carries the canonical ProviderSkillKey used internally.
 type ProviderSkillIndexRecord struct {
-	Key         ProviderSkillKey `json:"key"`
-	Description string           `json:"description"`
-	Properties  map[string]any   `json:"properties,omitempty"`
-	Digest      string           `json:"digest,omitempty"`
-	SkillBody   string           `json:"skillBody,omitempty"` // optional cached body (e.g. SKILL.md without frontmatter)
+	Key ProviderSkillKey `json:"key"`
+
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	DisplayName string `json:"displayName,omitempty"`
+
+	// Insert is parsed from SKILL.md frontmatter field "insert".
+	// Missing/empty defaults to "instructions".
+	Insert SkillInsert `json:"insert"`
+
+	Arguments []SkillArgument `json:"arguments,omitempty"`
+
+	RawFrontmatter map[string]any `json:"rawFrontmatter,omitempty"`
+
+	Warnings []string `json:"warnings,omitempty"`
+
+	Digest    string `json:"digest,omitempty"`
+	SkillBody string `json:"skillBody,omitempty"` // optional cached body (e.g. SKILL.md without frontmatter)
 }
 
 type SkillProvider interface {

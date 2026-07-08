@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/flexigpt/agentskills-go/internal/catalog"
 	"github.com/flexigpt/agentskills-go/spec"
 )
 
@@ -128,8 +129,16 @@ func (s *Session) ActivateKeys(
 			continue
 		}
 
-		if _, ok := s.catalog.GetIndex(k); !ok {
+		idx, ok := s.catalog.GetIndex(k)
+		if !ok {
 			return nil, fmt.Errorf("%w: unknown skill key: %+v", spec.ErrSkillNotFound, k)
+		}
+		insert, _ := catalog.NormalizeSkillInsert(idx.Insert)
+		if insert != spec.SkillInsertInstructions {
+			return nil, fmt.Errorf(
+				"%w: only insert=instructions skills can be activated in a session",
+				spec.ErrInvalidArgument,
+			)
 		}
 		seen[k] = struct{}{}
 		req = append(req, k)

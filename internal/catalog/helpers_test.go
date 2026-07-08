@@ -59,10 +59,10 @@ func (p *testProvider) Index(ctx context.Context, def spec.SkillDef) (spec.Provi
 		return p.indexFn(ctx, def)
 	}
 	return spec.ProviderSkillIndexRecord{
-		Key:         spec.ProviderSkillKey(def),
-		Description: "desc-" + def.Name,
-		Properties:  map[string]any{"p": def.Name},
-		Digest:      "digest-" + def.Name,
+		Key:            spec.ProviderSkillKey(def),
+		Description:    "desc-" + def.Name,
+		RawFrontmatter: map[string]any{"p": def.Name},
+		Digest:         "digest-" + def.Name,
 	}, nil
 }
 

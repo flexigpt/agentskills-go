@@ -176,27 +176,32 @@ func (p *Provider) Index(ctx context.Context, def spec.SkillDef) (spec.ProviderS
 		return spec.ProviderSkillIndexRecord{}, err
 	}
 
-	name, desc, props, digest, err := indexSkillDir(ctx, root)
+	meta, err := indexSkillDir(ctx, root)
 	if err != nil {
 		return spec.ProviderSkillIndexRecord{}, err
 	}
 
-	if name != def.Name {
+	if meta.Name != def.Name {
 		return spec.ProviderSkillIndexRecord{}, fmt.Errorf(
 			"%w: key.name=%q does not match SKILL.md frontmatter.name=%q",
 			spec.ErrInvalidArgument,
 
 			def.Name,
-			name,
+			meta.Name,
 		)
 	}
 
 	k := spec.ProviderSkillKey{Type: def.Type, Name: def.Name, Location: root} // canonical/internal
 	return spec.ProviderSkillIndexRecord{
-		Key:         k,
-		Description: desc,
-		Properties:  props,
-		Digest:      digest,
+		Key:            k,
+		Name:           meta.Name,
+		Description:    meta.Description,
+		DisplayName:    meta.DisplayName,
+		Insert:         meta.Insert,
+		Arguments:      meta.Arguments,
+		RawFrontmatter: meta.Props,
+		Warnings:       meta.Warnings,
+		Digest:         meta.Digest,
 	}, nil
 }
 

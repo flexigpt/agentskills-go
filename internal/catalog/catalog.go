@@ -113,6 +113,16 @@ func (c *Catalog) Add(ctx context.Context, def spec.SkillDef) (spec.SkillRecord,
 		return spec.SkillRecord{}, fmt.Errorf("%w: provider returned invalid record key", spec.ErrInvalidArgument)
 	}
 
+	insert, ok := NormalizeSkillInsert(idx.Insert)
+	if !ok {
+		return spec.SkillRecord{}, fmt.Errorf(
+			"%w: provider returned invalid insert value: %q",
+			spec.ErrInvalidArgument,
+			idx.Insert,
+		)
+	}
+	idx.Insert = insert
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -136,12 +146,7 @@ func (c *Catalog) Add(ctx context.Context, def spec.SkillDef) (spec.SkillRecord,
 
 	c.recomputeLLMNamesLocked()
 
-	return spec.SkillRecord{
-		Def:         def,
-		Description: idx.Description,
-		Properties:  idx.Properties,
-		Digest:      idx.Digest,
-	}, nil
+	return skillRecordFrom(def, idx), nil
 }
 
 // ResolveDef resolves an EXACT user-provided skill def (as originally added) to the internal canonical key.
@@ -176,12 +181,7 @@ func (c *Catalog) Remove(def spec.SkillDef) (spec.SkillRecord, spec.ProviderSkil
 		close(ch)
 	}
 
-	rec := spec.SkillRecord{
-		Def:         e.def,
-		Description: e.idx.Description,
-		Properties:  e.idx.Properties,
-		Digest:      e.idx.Digest,
-	}
+	rec := skillRecordFrom(e.def, e.idx)
 
 	delete(c.byKey, canon)
 	delete(c.byDef, e.def)
@@ -320,13 +320,8 @@ func (c *Catalog) ListUserEntries(f UserFilter) []UserEntry {
 			continue
 		}
 		out = append(out, UserEntry{
-			Key: k,
-			Record: spec.SkillRecord{
-				Def:         e.def,
-				Description: e.idx.Description,
-				Properties:  e.idx.Properties,
-				Digest:      e.idx.Digest,
-			},
+			Key:    k,
+			Record: skillRecordFrom(e.def, e.idx),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -336,6 +331,25 @@ func (c *Catalog) ListUserEntries(f UserFilter) []UserEntry {
 		return out[i].Record.Def.Name < out[j].Record.Def.Name
 	})
 	return out
+}
+
+func skillRecordFrom(def spec.SkillDef, idx spec.ProviderSkillIndexRecord) spec.SkillRecord {
+	insert, _ := NormalizeSkillInsert(idx.Insert)
+	name := idx.Name
+	if name == "" {
+		name = idx.Key.Name
+	}
+	return spec.SkillRecord{
+		Def:            def,
+		Name:           name,
+		Description:    idx.Description,
+		DisplayName:    idx.DisplayName,
+		Insert:         insert,
+		Arguments:      append([]spec.SkillArgument(nil), idx.Arguments...),
+		RawFrontmatter: idx.RawFrontmatter,
+		Warnings:       append([]string(nil), idx.Warnings...),
+		Digest:         idx.Digest,
+	}
 }
 
 // Conflict handling / name computation.

@@ -144,7 +144,11 @@ func TestIndexSkillDirAndLoadSkillBody_HappyPath(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	name, desc, props, digest, err := indexSkillDir(t.Context(), root)
+	skillIndex, err := indexSkillDir(t.Context(), root)
+	name := skillIndex.Name
+	desc := skillIndex.Description
+	props := skillIndex.Props
+	digest := skillIndex.Digest
 	if err != nil {
 		t.Fatalf("indexSkillDir: %v", err)
 	}
@@ -229,7 +233,7 @@ func TestIndexSkillDir_Errors(t *testing.T) {
 			if err := tt.setup(root); err != nil {
 				t.Fatalf("setup: %v", err)
 			}
-			_, _, _, _, err := indexSkillDir(t.Context(), root)
+			_, err := indexSkillDir(t.Context(), root)
 			if err == nil || !strings.Contains(err.Error(), tt.wantSub) {
 				t.Fatalf("expected err containing %q, got %v", tt.wantSub, err)
 			}
@@ -274,7 +278,7 @@ func TestIndexSkillDir_DisallowSymlink(t *testing.T) {
 		t.Skipf("symlink not supported: %v", err)
 	}
 
-	_, _, _, _, err := indexSkillDir(t.Context(), root)
+	_, err := indexSkillDir(t.Context(), root)
 	if err == nil || !strings.Contains(err.Error(), "must not be a symlink") {
 		t.Fatalf("expected symlink error, got %v", err)
 	}
@@ -283,7 +287,7 @@ func TestIndexSkillDir_DisallowSymlink(t *testing.T) {
 func TestIndexSkillDir_EmptyRootInvalidArgument(t *testing.T) {
 	t.Parallel()
 
-	_, _, _, _, err := indexSkillDir(t.Context(), " ")
+	_, err := indexSkillDir(t.Context(), " ")
 	if err == nil || !errors.Is(err, spec.ErrInvalidArgument) {
 		t.Fatalf("expected ErrInvalidArgument, got %v", err)
 	}

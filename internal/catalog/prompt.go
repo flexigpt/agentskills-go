@@ -12,6 +12,7 @@ type PromptFilter struct {
 	LLMNamePrefix  string
 	LocationPrefix string
 
+	Inserts []spec.SkillInsert
 	// AllowDefs restricts to an explicit allowlist of host/lifecycle definitions. Empty means "all".
 	AllowDefs []spec.SkillDef
 }
@@ -31,6 +32,10 @@ func (f PromptFilter) match(e *entry) bool {
 			return false
 		}
 	}
+	if len(f.Inserts) > 0 && !insertMatches(f.Inserts, e.idx.Insert) {
+		return false
+	}
+
 	if f.LLMNamePrefix != "" && len(e.llmName) >= len(f.LLMNamePrefix) {
 		if e.llmName[:len(f.LLMNamePrefix)] != f.LLMNamePrefix {
 			return false
@@ -56,6 +61,7 @@ type UserFilter struct {
 	NamePrefix     string
 	LocationPrefix string
 	AllowDefs      []spec.SkillDef
+	Inserts        []spec.SkillInsert
 }
 
 func (f UserFilter) match(e *entry) bool {
@@ -66,6 +72,9 @@ func (f UserFilter) match(e *entry) bool {
 		return false
 	}
 	if len(f.Types) > 0 && !slices.Contains(f.Types, e.idx.Key.Type) {
+		return false
+	}
+	if len(f.Inserts) > 0 && !insertMatches(f.Inserts, e.idx.Insert) {
 		return false
 	}
 	if f.NamePrefix != "" && len(e.def.Name) >= len(f.NamePrefix) {
@@ -83,4 +92,18 @@ func (f UserFilter) match(e *entry) bool {
 		return false
 	}
 	return true
+}
+
+func insertMatches(allowed []spec.SkillInsert, actual spec.SkillInsert) bool {
+	normActual, ok := NormalizeSkillInsert(actual)
+	if !ok {
+		return false
+	}
+	for _, candidate := range allowed {
+		normCandidate, ok := NormalizeSkillInsert(candidate)
+		if ok && normCandidate == normActual {
+			return true
+		}
+	}
+	return false
 }

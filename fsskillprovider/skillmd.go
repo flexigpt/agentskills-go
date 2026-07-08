@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/flexigpt/agentskills-go/internal/catalog"
 	"github.com/flexigpt/agentskills-go/spec"
 	"github.com/goccy/go-yaml"
 )
@@ -21,20 +22,35 @@ const (
 	maxSkillMDBytes = 2 << 20 // 2 MiB
 )
 
+type skillDirIndex struct {
+	Name        string
+	Description string
+	DisplayName string
+
+	Insert    spec.SkillInsert
+	Arguments []spec.SkillArgument
+
+	Props map[string]any
+
+	Warnings []string
+
+	Digest string
+}
+
 // indexSkillDir reads and validates SKILL.md frontmatter, returning metadata and digest.
 // It does NOT return the body; body is loaded separately for progressive disclosure.
 // Assumes canonical root passed. All validations already done.
 func indexSkillDir(
 	ctx context.Context,
 	rootDir string,
-) (name, description string, props map[string]any, digest string, err error) {
+) (skillDirIndex, error) {
 	if err := ctx.Err(); err != nil {
-		return "", "", nil, "", fmt.Errorf("indexSkillDir: %w", err)
+		return skillDirIndex{}, fmt.Errorf("indexSkillDir: %w", err)
 	}
 
 	root := strings.TrimSpace(rootDir)
 	if root == "" {
-		return "", "", nil, "", fmt.Errorf("%w: empty rootDir", spec.ErrInvalidArgument)
+		return skillDirIndex{}, fmt.Errorf("%w: empty rootDir", spec.ErrInvalidArgument)
 	}
 
 	skillMDPath := filepath.Join(root, skillFileName)
@@ -42,47 +58,74 @@ func indexSkillDir(
 	// Disallow SKILL.md being a symlink.
 	if lst, lerr := os.Lstat(skillMDPath); lerr == nil {
 		if lst.Mode()&os.ModeSymlink != 0 {
-			return "", "", nil, "", errors.New("SKILL.md must not be a symlink")
+			return skillDirIndex{}, errors.New("SKILL.md must not be a symlink")
 		}
 		if !lst.Mode().IsRegular() {
-			return "", "", nil, "", errors.New("SKILL.md must be a regular file")
+			return skillDirIndex{}, errors.New("SKILL.md must be a regular file")
 		}
 	}
 
 	b, sha, err := readAllLimitedAndDigest(skillMDPath)
 	if err != nil {
-		return "", "", nil, "", fmt.Errorf("indexSkillDir: %w", err)
+		return skillDirIndex{}, fmt.Errorf("indexSkillDir: %w", err)
 	}
 
 	fm, _, hasFM, err := splitFrontmatter(string(b))
 	if err != nil {
-		return "", "", nil, "", fmt.Errorf("indexSkillDir: %w", err)
+		return skillDirIndex{}, fmt.Errorf("indexSkillDir: %w", err)
 	}
 	if !hasFM {
-		return "", "", nil, "", errors.New("SKILL.md must contain YAML frontmatter")
+		return skillDirIndex{}, errors.New("SKILL.md must contain YAML frontmatter")
 	}
-
-	props = map[string]any{}
+	props := map[string]any{}
 	if err := yaml.Unmarshal([]byte(fm), &props); err != nil {
-		return "", "", nil, "", fmt.Errorf("invalid frontmatter YAML: %w", err)
+		return skillDirIndex{}, fmt.Errorf("invalid frontmatter YAML: %w", err)
 	}
 
-	name = strings.TrimSpace(asString(props["name"]))
-	description = strings.TrimSpace(asString(props["description"]))
+	name := strings.TrimSpace(asString(props["name"]))
+	description := strings.TrimSpace(asString(props["description"]))
 
 	if err := validateName(name); err != nil {
-		return "", "", nil, "", fmt.Errorf("indexSkillDir: %w", err)
+		return skillDirIndex{}, fmt.Errorf("indexSkillDir: %w", err)
 	}
 	if err := validateDescription(description); err != nil {
-		return "", "", nil, "", fmt.Errorf("indexSkillDir: %w", err)
+		return skillDirIndex{}, fmt.Errorf("indexSkillDir: %w", err)
 	}
 
 	// FS convention: name must match directory name.
 	if base := filepath.Base(root); base != "" && name != base {
-		return "", "", nil, "", fmt.Errorf("frontmatter.name %q must match directory name %q", name, base)
+		return skillDirIndex{}, fmt.Errorf("frontmatter.name %q must match directory name %q", name, base)
 	}
 
-	return name, description, props, "sha256:" + sha, nil
+	insert, warnings := parseSkillInsert(props["insert"])
+	args, argWarnings := parseSkillArguments(props["arguments"])
+	warnings = append(warnings, argWarnings...)
+	_, body, _, _ := splitFrontmatter(string(b))
+
+	return skillDirIndex{
+		Name:        name,
+		Description: description,
+		DisplayName: firstMarkdownH1(body, name),
+		Insert:      insert,
+		Arguments:   args,
+		Props:       props,
+		Warnings:    uniqueStrings(warnings),
+		Digest:      "sha256:" + sha,
+	}, nil
+}
+
+func firstMarkdownH1(body, fallback string) string {
+	for line := range strings.SplitSeq(body, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "# ") {
+			continue
+		}
+		title := strings.TrimSpace(strings.TrimPrefix(line, "# "))
+		if title != "" {
+			return title
+		}
+	}
+	return fallback
 }
 
 func loadSkillBody(ctx context.Context, rootDir string) (string, error) {
@@ -127,6 +170,7 @@ func loadSkillBody(ctx context.Context, rootDir string) (string, error) {
 	}
 
 	body = strings.TrimLeft(body, "\r\n")
+
 	return body, nil
 }
 
@@ -221,6 +265,137 @@ func validateDescription(desc string) error {
 		return errors.New("frontmatter.description too long (max 1024)")
 	}
 	return nil
+}
+
+func parseSkillInsert(raw any) (insert spec.SkillInsert, warnings []string) {
+	if raw == nil {
+		return spec.SkillInsertInstructions, nil
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return spec.SkillInsertInstructions, []string{"frontmatter.insert must be a string; defaulted to instructions"}
+	}
+	insert, ok = catalog.NormalizeSkillInsert(spec.SkillInsert(s))
+	if !ok {
+		return spec.SkillInsertInstructions, []string{
+			"unsupported frontmatter.insert value " + s + "; defaulted to instructions",
+		}
+	}
+	return insert, nil
+}
+
+func parseSkillArguments(raw any) (args []spec.SkillArgument, argWarnings []string) {
+	if raw == nil {
+		return nil, nil
+	}
+
+	if s, ok := raw.(string); ok {
+		return nil, []string{"frontmatter.arguments must be a list, not a string: " + s}
+	}
+
+	return parseSkillArgumentsValue(raw)
+}
+
+func parseSkillArgumentsValue(raw any) (args []spec.SkillArgument, argWarnings []string) {
+	if raw == nil {
+		return nil, nil
+	}
+
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, []string{"frontmatter.arguments must be a list of objects or strings"}
+	}
+
+	out := make([]spec.SkillArgument, 0, len(items))
+	warnings := []string{}
+	seen := map[string]struct{}{}
+
+	for idx, item := range items {
+		if s, ok := item.(string); ok {
+			name := strings.TrimSpace(s)
+			if !catalog.IsValidSkillArgumentName(name) {
+				warnings = append(warnings, fmt.Sprintf("frontmatter.arguments[%d] is not a valid argument name", idx))
+				continue
+			}
+			if _, exists := seen[name]; exists {
+				warnings = append(warnings, "duplicate argument ignored: "+name)
+				continue
+			}
+			seen[name] = struct{}{}
+			out = append(out, spec.SkillArgument{Name: name})
+			continue
+		}
+
+		m, ok := asStringMap(item)
+		if !ok {
+			warnings = append(warnings, fmt.Sprintf("frontmatter.arguments[%d] must be an object or string", idx))
+			continue
+		}
+
+		name := strings.TrimSpace(valueAsString(m["name"]))
+		if !catalog.IsValidSkillArgumentName(name) {
+			warnings = append(warnings, fmt.Sprintf("frontmatter.arguments[%d].name is invalid", idx))
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			warnings = append(warnings, "duplicate argument ignored: "+name)
+			continue
+		}
+		seen[name] = struct{}{}
+
+		out = append(out, spec.SkillArgument{
+			Name:        name,
+			Description: valueAsString(m["description"]),
+			Default:     valueAsString(m["default"]),
+		})
+	}
+
+	return out, uniqueStrings(warnings)
+}
+
+func asStringMap(v any) (map[string]any, bool) {
+	if m, ok := v.(map[string]any); ok {
+		return m, true
+	}
+	if m, ok := v.(map[any]any); ok {
+		out := make(map[string]any, len(m))
+		for k, v := range m {
+			ks, ok := k.(string)
+			if !ok {
+				return nil, false
+			}
+			out[ks] = v
+		}
+		return out, true
+	}
+	return nil, false
+}
+
+func valueAsString(v any) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprint(v)
+}
+
+func uniqueStrings(in []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 func asString(v any) string {

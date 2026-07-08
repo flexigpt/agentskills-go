@@ -50,10 +50,73 @@ type SkillDef struct {
 	Location string `json:"location"`
 }
 
+// SkillInsert describes where a rendered SKILL.md body should be inserted by the consumer.
+//
+// The default is SkillInsertInstructions. This keeps normal Agent Skills behavior:
+// a skill body is instruction/context material unless it explicitly opts into user insertion.
+type SkillInsert string
+
+const (
+	// SkillInsertInstructions means the rendered body is instruction/context material.
+	SkillInsertInstructions SkillInsert = "instructions"
+	// SkillInsertUserMessage means the rendered body should be placed in the user-message body.
+	SkillInsertUserMessage SkillInsert = "user-message"
+)
+
+// SkillArgument is a named string argument supported by the FlexiGPT skill extension.
+//
+// Values are intentionally string-only. Consumers may build richer UI validation on top,
+// but the runtime only renders strings into the skill body.
+type SkillArgument struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Default     string `json:"default,omitempty"`
+}
+
+// RenderSkillOut is returned by Runtime.RenderSkill.
+type RenderSkillOut struct {
+	Name        string      `json:"name"`
+	Description string      `json:"description,omitempty"`
+	DisplayName string      `json:"displayName,omitempty"`
+	Insert      SkillInsert `json:"insert"`
+
+	Text string `json:"text"`
+
+	Arguments        []SkillArgument   `json:"arguments,omitempty"`
+	AppliedArguments map[string]string `json:"appliedArguments,omitempty"`
+
+	RawFrontmatter map[string]any `json:"rawFrontmatter,omitempty"`
+	Warnings       []string       `json:"warnings,omitempty"`
+}
+
+// RenderSkillBodyResult is the low-level result of rendering declared arguments into a skill body.
+type RenderSkillBodyResult struct {
+	Text string `json:"text"`
+
+	AppliedArguments    map[string]string `json:"appliedArguments,omitempty"`
+	UnknownPlaceholders []string          `json:"unknownPlaceholders,omitempty"`
+	Warnings            []string          `json:"warnings,omitempty"`
+}
+
 // SkillRecord is the catalog record for a skill.
 type SkillRecord struct {
-	Def         SkillDef       `json:"def"`
-	Description string         `json:"description"`
-	Properties  map[string]any `json:"properties,omitempty"`
-	Digest      string         `json:"digest,omitempty"`
+	Def SkillDef `json:"def"`
+
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	DisplayName string `json:"displayName,omitempty"`
+
+	// Insert is the FlexiGPT insertion hint parsed from SKILL.md.
+	// Defaults to "instructions".
+	Insert SkillInsert `json:"insert"`
+
+	Arguments []SkillArgument `json:"arguments,omitempty"`
+
+	// RawFrontmatter preserves the parsed SKILL.md YAML frontmatter for callers that want
+	// compatibility metadata that this runtime does not interpret.
+	RawFrontmatter map[string]any `json:"rawFrontmatter,omitempty"`
+
+	Warnings []string `json:"warnings,omitempty"`
+
+	Digest string `json:"digest,omitempty"`
 }

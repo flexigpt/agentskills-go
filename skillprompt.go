@@ -58,6 +58,8 @@ type SkillListFilter struct {
 	LocationPrefix string
 	AllowSkills    []spec.SkillDef
 
+	Inserts []spec.SkillInsert
+
 	SessionID spec.SessionID
 	Activity  spec.SkillActivity
 }
@@ -139,6 +141,11 @@ func (r *Runtime) SkillsPrompt(ctx context.Context, f *SkillFilter) (string, err
 			if !ok {
 				continue
 			}
+			idx, ok := r.catalog.GetIndex(k)
+			if !ok {
+				continue
+			}
+
 			body, err := r.catalog.EnsureBody(ctx, k)
 			if err != nil {
 				if errors.Is(err, spec.ErrSkillNotFound) {
@@ -146,7 +153,8 @@ func (r *Runtime) SkillsPrompt(ctx context.Context, f *SkillFilter) (string, err
 				}
 				return "", err
 			}
-			items = append(items, catalog.ActiveSkillItem{Name: h.Name, Body: body})
+			rendered := catalog.RenderSkillBody(body, idx.Arguments, nil)
+			items = append(items, catalog.ActiveSkillItem{Name: h.Name, Body: rendered.Text})
 		}
 
 		activePrompt = catalog.ActiveSkillsPrompt(items)
@@ -192,6 +200,87 @@ func (r *Runtime) SkillsPrompt(ctx context.Context, f *SkillFilter) (string, err
 	return wrapSkillsPrompt(availablePrompt, activePrompt), nil
 }
 
+type RenderSkillParams struct {
+	// Def is the exact host/lifecycle skill definition previously added to the runtime.
+	Def spec.SkillDef
+
+	// Arguments are named string values used for $name and {{name}} substitution.
+	Arguments map[string]string
+}
+
+// RenderSkill renders a skill body using the FlexiGPT skill extensions.
+//
+// This is a HOST/LIFECYCLE API intended for app wrappers and chat UIs. It does not activate
+// the skill in a session and it never executes commands from SKILL.md.
+func (r *Runtime) RenderSkill(ctx context.Context, p RenderSkillParams) (spec.RenderSkillOut, error) {
+	if ctx == nil {
+		return spec.RenderSkillOut{}, fmt.Errorf("%w: nil context", spec.ErrInvalidArgument)
+	}
+	if err := ctx.Err(); err != nil {
+		return spec.RenderSkillOut{}, err
+	}
+	if r == nil {
+		return spec.RenderSkillOut{}, fmt.Errorf("%w: nil runtime receiver", spec.ErrInvalidArgument)
+	}
+
+	def := p.Def
+	if strings.TrimSpace(def.Type) != def.Type ||
+		strings.TrimSpace(def.Name) != def.Name ||
+		strings.TrimSpace(def.Location) != def.Location {
+		return spec.RenderSkillOut{}, fmt.Errorf(
+			"%w: def fields must not contain leading/trailing whitespace",
+			spec.ErrInvalidArgument,
+		)
+	}
+	if strings.TrimSpace(def.Type) == "" ||
+		strings.TrimSpace(def.Name) == "" ||
+		strings.TrimSpace(def.Location) == "" {
+		return spec.RenderSkillOut{}, fmt.Errorf(
+			"%w: def.type, def.name, and def.location are required",
+			spec.ErrInvalidArgument,
+		)
+	}
+
+	key, ok := r.catalog.ResolveDef(def)
+	if !ok {
+		return spec.RenderSkillOut{}, fmt.Errorf("%w: unknown skill def: %+v", spec.ErrSkillNotFound, def)
+	}
+
+	idx, ok := r.catalog.GetIndex(key)
+	if !ok {
+		return spec.RenderSkillOut{}, spec.ErrSkillNotFound
+	}
+
+	body, err := r.catalog.EnsureBody(ctx, key)
+	if err != nil {
+		return spec.RenderSkillOut{}, err
+	}
+
+	rendered := catalog.RenderSkillBody(body, idx.Arguments, p.Arguments)
+	insert, _ := catalog.NormalizeSkillInsert(idx.Insert)
+
+	warnings := make([]string, 0, len(idx.Warnings)+len(rendered.Warnings))
+	warnings = append(warnings, idx.Warnings...)
+	warnings = append(warnings, rendered.Warnings...)
+
+	name := idx.Name
+	if name == "" {
+		name = idx.Key.Name
+	}
+
+	return spec.RenderSkillOut{
+		Name:             name,
+		Description:      idx.Description,
+		DisplayName:      idx.DisplayName,
+		Insert:           insert,
+		Text:             rendered.Text,
+		Arguments:        append([]spec.SkillArgument(nil), idx.Arguments...),
+		AppliedArguments: rendered.AppliedArguments,
+		RawFrontmatter:   idx.RawFrontmatter,
+		Warnings:         warnings,
+	}, nil
+}
+
 func normalizeSkillListFilter(f *SkillListFilter) SkillListFilter {
 	if f == nil {
 		return SkillListFilter{Activity: spec.SkillActivityAny}
@@ -221,6 +310,7 @@ func normalizeSkillListFilter(f *SkillListFilter) SkillListFilter {
 		seenD[d] = struct{}{}
 		allow = append(allow, d)
 	}
+	inserts := normalizeInsertFilter(f.Inserts)
 	act := spec.SkillActivity(strings.TrimSpace(string(f.Activity)))
 	if act == "" {
 		act = spec.SkillActivityAny
@@ -230,6 +320,7 @@ func normalizeSkillListFilter(f *SkillListFilter) SkillListFilter {
 		NamePrefix:     f.NamePrefix,
 		LocationPrefix: f.LocationPrefix,
 		AllowSkills:    allow,
+		Inserts:        inserts,
 		SessionID:      spec.SessionID(strings.TrimSpace(string(f.SessionID))),
 		Activity:       act,
 	}
@@ -244,6 +335,7 @@ func toCatalogUserFilter(f *SkillListFilter) catalog.UserFilter {
 		NamePrefix:     f.NamePrefix,
 		LocationPrefix: f.LocationPrefix,
 		AllowDefs:      append([]spec.SkillDef(nil), f.AllowSkills...),
+		Inserts:        append([]spec.SkillInsert(nil), f.Inserts...),
 	}
 }
 
@@ -295,6 +387,23 @@ func normalizeSkillsPromptFilter(f *SkillFilter) SkillFilter {
 	}
 }
 
+func normalizeInsertFilter(in []spec.SkillInsert) []spec.SkillInsert {
+	out := make([]spec.SkillInsert, 0, len(in))
+	seen := map[spec.SkillInsert]struct{}{}
+	for _, raw := range in {
+		insert, ok := catalog.NormalizeSkillInsert(raw)
+		if !ok {
+			continue
+		}
+		if _, exists := seen[insert]; exists {
+			continue
+		}
+		seen[insert] = struct{}{}
+		out = append(out, insert)
+	}
+	return out
+}
+
 func wrapSkillsPrompt(parts ...string) string {
 	var b strings.Builder
 	b.WriteString(skillsPromptStart)
@@ -318,10 +427,15 @@ func toCatalogPromptFilter(f *SkillFilter) catalog.PromptFilter {
 	if f == nil {
 		return catalog.PromptFilter{}
 	}
+	// SkillsPrompt is LLM-facing progressive disclosure. Only instruction skills are advertised/loadable here.
+	// "insert=user-message" skills are rendered through Runtime.RenderSkill by the host/chat UI instead.
+	inserts := []spec.SkillInsert{spec.SkillInsertInstructions}
+
 	return catalog.PromptFilter{
 		Types:          append([]string(nil), f.Types...),
 		LLMNamePrefix:  f.NamePrefix,
 		LocationPrefix: f.LocationPrefix,
 		AllowDefs:      append([]spec.SkillDef(nil), f.AllowSkills...),
+		Inserts:        inserts,
 	}
 }
