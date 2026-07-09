@@ -3,6 +3,8 @@ package catalog
 import (
 	"sort"
 	"strings"
+
+	"github.com/flexigpt/agentskills-go/spec"
 )
 
 const (
@@ -18,11 +20,13 @@ type AvailableSkillItem struct {
 	Name        string
 	Description string
 	Location    string
+	Resources   spec.SkillResourceInfo
 }
 
 type ActiveSkillItem struct {
-	Name string
-	Body string
+	Name      string
+	Body      string
+	Resources spec.SkillResourceInfo
 }
 
 func AvailableSkillsPrompt(items []AvailableSkillItem) string {
@@ -64,6 +68,7 @@ func AvailableSkillsPrompt(items []AvailableSkillItem) string {
 			sb.WriteString(trimInline(it.Description))
 			sb.WriteByte('\n')
 		}
+
 	}
 
 	sb.WriteString(availableSkillsEnd)
@@ -88,6 +93,7 @@ func ActiveSkillsPrompt(items []ActiveSkillItem) string {
 		sb.WriteString("name: ")
 		sb.WriteString(trimInline(it.Name))
 		sb.WriteByte('\n')
+
 		sb.WriteString("body:\n")
 
 		body := trimTrailingNewlines(it.Body)

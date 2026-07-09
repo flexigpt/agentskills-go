@@ -4,7 +4,7 @@ const (
 	skillsRulesCommon = `
 Rules:
 1) Only use skills that are listed in the provided skills prompt.
-2) Prefer reading skill resources (skills-readresource) before running scripts.
+2) Prefer reading advertised skill resource locations with skills-readresource before running scripts.
 3) After calling skills-load or skills-unload, rely on the updated skills context in subsequent turns.`
 
 	skillsToolsBase = `You have access to "skills" tools:

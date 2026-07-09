@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,6 +30,8 @@ type skillDirIndex struct {
 
 	Insert    spec.SkillInsert
 	Arguments []spec.SkillArgument
+
+	Resources spec.SkillResourceInfo
 
 	Props map[string]any
 
@@ -100,6 +103,13 @@ func indexSkillDir(
 	insert, warnings := parseSkillInsert(props["insert"])
 	args, argWarnings := parseSkillArguments(props["arguments"])
 	warnings = append(warnings, argWarnings...)
+
+	resources, resourceWarnings, err := indexSkillResources(ctx, root)
+	if err != nil {
+		return skillDirIndex{}, fmt.Errorf("indexSkillDir: %w", err)
+	}
+	warnings = append(warnings, resourceWarnings...)
+
 	_, body, _, _ := splitFrontmatter(string(b))
 
 	return skillDirIndex{
@@ -108,6 +118,7 @@ func indexSkillDir(
 		DisplayName: firstMarkdownH1(body, name),
 		Insert:      insert,
 		Arguments:   args,
+		Resources:   resources,
 		Props:       props,
 		Warnings:    uniqueStrings(warnings),
 		Digest:      "sha256:" + sha,
@@ -172,6 +183,85 @@ func loadSkillBody(ctx context.Context, rootDir string) (string, error) {
 	body = strings.TrimLeft(body, "\r\n")
 
 	return body, nil
+}
+
+func indexSkillResources(
+	ctx context.Context,
+	rootDir string,
+) (spec.SkillResourceInfo, []string, error) {
+	if err := ctx.Err(); err != nil {
+		return spec.SkillResourceInfo{}, nil, err
+	}
+
+	root := strings.TrimSpace(rootDir)
+	if root == "" {
+		return spec.SkillResourceInfo{}, nil, fmt.Errorf("%w: empty rootDir", spec.ErrInvalidArgument)
+	}
+
+	var info spec.SkillResourceInfo
+	var warnings []string
+
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		rel := resourceRelLocation(root, path)
+		if walkErr != nil {
+			warnings = append(warnings, fmt.Sprintf("resource scan skipped %q: %v", rel, walkErr))
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d == nil {
+			return nil
+		}
+
+		if rel == "." {
+			return nil
+		}
+		if rel == skillFileName {
+			return nil
+		}
+
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+
+		st, err := d.Info()
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("resource scan skipped %q: %v", rel, err))
+			return nil
+		}
+		if !st.Mode().IsRegular() {
+			return nil
+		}
+
+		info.TotalCount++
+		if len(info.Locations) < spec.MaxSkillResourceLocations {
+			info.Locations = append(info.Locations, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		return spec.SkillResourceInfo{}, warnings, err
+	}
+
+	info.HasResources = info.TotalCount > 0
+	info.MoreLocations = info.TotalCount > len(info.Locations)
+	return info, uniqueStrings(warnings), nil
+}
+
+func resourceRelLocation(root, path string) string {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || strings.TrimSpace(rel) == "" {
+		return "."
+	}
+	return filepath.ToSlash(rel)
 }
 
 func readAllLimitedAndDigest(path string) (data []byte, dataSHA string, err error) {

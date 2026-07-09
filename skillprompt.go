@@ -154,7 +154,11 @@ func (r *Runtime) SkillsPrompt(ctx context.Context, f *SkillFilter) (string, err
 				return "", err
 			}
 			rendered := catalog.RenderSkillBody(body, idx.Arguments, nil)
-			items = append(items, catalog.ActiveSkillItem{Name: h.Name, Body: rendered.Text})
+			items = append(items, catalog.ActiveSkillItem{
+				Name:      h.Name,
+				Body:      rendered.Text,
+				Resources: idx.Resources,
+			})
 		}
 
 		activePrompt = catalog.ActiveSkillsPrompt(items)
@@ -181,6 +185,7 @@ func (r *Runtime) SkillsPrompt(ctx context.Context, f *SkillFilter) (string, err
 				Name:        h.Name,
 				Description: rec.Description,
 				Location:    h.Location,
+				Resources:   rec.Resources,
 			})
 		}
 
@@ -273,6 +278,7 @@ func (r *Runtime) RenderSkill(ctx context.Context, p RenderSkillParams) (spec.Re
 		Description:      idx.Description,
 		DisplayName:      idx.DisplayName,
 		Insert:           insert,
+		Resources:        cloneSkillResourceInfo(idx.Resources),
 		Text:             rendered.Text,
 		Arguments:        append([]spec.SkillArgument(nil), idx.Arguments...),
 		AppliedArguments: rendered.AppliedArguments,
@@ -402,6 +408,11 @@ func normalizeInsertFilter(in []spec.SkillInsert) []spec.SkillInsert {
 		out = append(out, insert)
 	}
 	return out
+}
+
+func cloneSkillResourceInfo(in spec.SkillResourceInfo) spec.SkillResourceInfo {
+	in.Locations = append([]string(nil), in.Locations...)
+	return in
 }
 
 func wrapSkillsPrompt(parts ...string) string {

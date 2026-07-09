@@ -97,6 +97,8 @@ type ProviderSkillIndexRecord struct {
 
 	Arguments []SkillArgument `json:"arguments,omitempty"`
 
+	Resources SkillResourceInfo `json:"resources"`
+
 	RawFrontmatter map[string]any `json:"rawFrontmatter,omitempty"`
 
 	Warnings []string `json:"warnings,omitempty"`
@@ -125,7 +127,7 @@ type SkillProvider interface {
 		encoding ReadResourceEncoding,
 	) ([]llmtoolsgoSpec.ToolOutputUnion, error)
 
-	// RunScript executes a script relative to the skill base location.
+	// RunScript executes a provider-scoped script identified by scriptLocation.
 	// Providers define/enforce constraints (e.g. must be under scripts/).
 	RunScript(
 		ctx context.Context,

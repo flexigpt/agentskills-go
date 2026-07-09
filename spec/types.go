@@ -3,6 +3,10 @@ package spec
 // SessionID identifies a runtime session (UUIDv7 string).
 type SessionID string
 
+// MaxSkillResourceLocations is the maximum number of provider-defined resource locations
+// included in skill metadata. TotalCount still reports the full provider-reported count.
+const MaxSkillResourceLocations = 1024
+
 // SkillActivity controls whether SkillsPrompt includes active, inactive, or both sets.
 type SkillActivity string
 
@@ -73,12 +77,34 @@ type SkillArgument struct {
 	Default     string `json:"default,omitempty"`
 }
 
+// SkillResourceInfo describes additional provider-defined resources associated with a skill.
+//
+// Locations are provider-defined values intended to be passed back as resourceLocation
+// to skills-readresource. For an fs provider they are typically slash-separated relative
+// file paths, but non-fs providers may use repository paths, embedded resource names,
+// object IDs, VM resource handles, or any other provider-defined location format.
+type SkillResourceInfo struct {
+	// HasResources is true when the provider advertises at least one additional resource.
+	HasResources bool `json:"hasResources"`
+
+	// TotalCount is the total number of additional resources found, even when Locations is truncated.
+	TotalCount int `json:"totalCount"`
+
+	// Locations contains up to MaxSkillResourceLocations provider-defined resource locations.
+	Locations []string `json:"locations,omitempty"`
+
+	// MoreLocations is true when more locations exist than are included in Locations.
+	MoreLocations bool `json:"moreLocations"`
+}
+
 // RenderSkillOut is returned by Runtime.RenderSkill.
 type RenderSkillOut struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description,omitempty"`
 	DisplayName string      `json:"displayName,omitempty"`
 	Insert      SkillInsert `json:"insert"`
+
+	Resources SkillResourceInfo `json:"resources"`
 
 	Text string `json:"text"`
 
@@ -111,6 +137,8 @@ type SkillRecord struct {
 	Insert SkillInsert `json:"insert"`
 
 	Arguments []SkillArgument `json:"arguments,omitempty"`
+
+	Resources SkillResourceInfo `json:"resources"`
 
 	// RawFrontmatter preserves the parsed SKILL.md YAML frontmatter for callers that want
 	// compatibility metadata that this runtime does not interpret.

@@ -346,10 +346,16 @@ func skillRecordFrom(def spec.SkillDef, idx spec.ProviderSkillIndexRecord) spec.
 		DisplayName:    idx.DisplayName,
 		Insert:         insert,
 		Arguments:      append([]spec.SkillArgument(nil), idx.Arguments...),
+		Resources:      cloneSkillResourceInfo(idx.Resources),
 		RawFrontmatter: idx.RawFrontmatter,
 		Warnings:       append([]string(nil), idx.Warnings...),
 		Digest:         idx.Digest,
 	}
+}
+
+func cloneSkillResourceInfo(in spec.SkillResourceInfo) spec.SkillResourceInfo {
+	in.Locations = append([]string(nil), in.Locations...)
+	return in
 }
 
 // Conflict handling / name computation.
