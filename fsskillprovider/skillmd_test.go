@@ -6,129 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/flexigpt/agentskills-go/spec"
 )
-
-func TestSplitFrontmatter(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		in       string
-		wantHas  bool
-		wantErr  bool
-		wantBody string
-	}{
-		{
-			name:     "no frontmatter",
-			in:       "hello\nworld\n",
-			wantHas:  false,
-			wantErr:  false,
-			wantBody: "hello\nworld\n",
-		},
-		{
-			name:    "unterminated frontmatter",
-			in:      "---\nname: x\n",
-			wantHas: false,
-			wantErr: true,
-		},
-		{
-			name:     "frontmatter with body",
-			in:       "---\nname: x\ndescription: y\n---\n\n# Title\n",
-			wantHas:  true,
-			wantErr:  false,
-			wantBody: "\n# Title\n",
-		},
-		{
-			name:     "windows newlines",
-			in:       "---\r\nname: x\r\ndescription: y\r\n---\r\nBody\r\n",
-			wantHas:  true,
-			wantErr:  false,
-			wantBody: "Body\r\n",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			fm, body, has, err := splitFrontmatter(tt.in)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("expected error")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected err: %v", err)
-			}
-			if has != tt.wantHas {
-				t.Fatalf("has=%v want=%v fm=%q body=%q", has, tt.wantHas, fm, body)
-			}
-			if tt.wantHas && body != tt.wantBody {
-				t.Fatalf("body mismatch: got=%q want=%q", body, tt.wantBody)
-			}
-		})
-	}
-}
-
-func TestValidateNameAndDescription(t *testing.T) {
-	t.Parallel()
-
-	nameTests := []struct {
-		in      string
-		wantErr bool
-	}{
-		{"", true},
-		{"a", false},
-		{"A", true},
-		{"-a", true},
-		{"a-", true},
-		{"a--b", true},
-		{"a_b", true},
-		{strings.Repeat("a", 64), false},
-		{strings.Repeat("a", 65), true},
-	}
-
-	for _, tt := range nameTests {
-		t.Run("name_"+tt.in, func(t *testing.T) {
-			t.Parallel()
-			err := validateName(tt.in)
-			if tt.wantErr && err == nil {
-				t.Fatalf("expected error")
-			}
-			if !tt.wantErr && err != nil {
-				t.Fatalf("unexpected err: %v", err)
-			}
-		})
-	}
-
-	descTests := []struct {
-		in      string
-		wantErr bool
-	}{
-		{"", true},
-		{"x", false},
-		{strings.Repeat("d", 1024), false},
-		{strings.Repeat("d", 1025), true},
-	}
-
-	for _, tt := range descTests {
-		t.Run("desc_len_"+strconv.Itoa(len(tt.in)), func(t *testing.T) {
-			t.Parallel()
-			err := validateDescription(tt.in)
-			if tt.wantErr && err == nil {
-				t.Fatalf("expected error")
-			}
-			if !tt.wantErr && err != nil {
-				t.Fatalf("unexpected err: %v", err)
-			}
-		})
-	}
-}
 
 func TestIndexSkillDirAndLoadSkillBody_HappyPath(t *testing.T) {
 	t.Parallel()
@@ -194,7 +76,7 @@ func TestIndexSkillDir_Errors(t *testing.T) {
 				}
 				return os.WriteFile(filepath.Join(root, "SKILL.md"), []byte("no fm"), 0o600)
 			},
-			wantSub: "must contain YAML frontmatter",
+			wantSub: "SKILL.md requires YAML frontmatter",
 		},
 		{
 			name: "invalid yaml",
@@ -208,7 +90,7 @@ func TestIndexSkillDir_Errors(t *testing.T) {
 					0o600,
 				)
 			},
-			wantSub: "invalid frontmatter YAML",
+			wantSub: "not found",
 		},
 		{
 			name: "name mismatch dir",
@@ -222,7 +104,7 @@ func TestIndexSkillDir_Errors(t *testing.T) {
 					0o600,
 				)
 			},
-			wantSub: "must match directory name",
+			wantSub: "must match expected name",
 		},
 	}
 

@@ -46,6 +46,10 @@ tasks:
       - gomajor list
       - go-mod-upgrade -l
 
+  fmt:
+    cmds:
+      - golangci-lint fmt
+
   lint-gopls:
     cmds:
       - ./scripts/lint_gopls_check.sh

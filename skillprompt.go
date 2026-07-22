@@ -278,6 +278,7 @@ func (r *Runtime) RenderSkill(ctx context.Context, p RenderSkillParams) (spec.Re
 		Description:      idx.Description,
 		DisplayName:      idx.DisplayName,
 		Insert:           insert,
+		Tags:             append([]string(nil), idx.Tags...),
 		Resources:        cloneSkillResourceInfo(idx.Resources),
 		Text:             rendered.Text,
 		Arguments:        append([]spec.SkillArgument(nil), idx.Arguments...),

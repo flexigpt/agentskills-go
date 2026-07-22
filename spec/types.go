@@ -67,6 +67,13 @@ const (
 	SkillInsertUserMessage SkillInsert = "user-message"
 )
 
+// ParseSkillDocumentOptions controls provider-independent SKILL.md parsing.
+type ParseSkillDocumentOptions struct {
+	// ExpectedName is an optional source-derived name, such as the containing
+	// filesystem directory name. A mismatch triggers a error.
+	ExpectedName string `json:"expectedName,omitempty"`
+}
+
 // SkillArgument is a named string argument supported by the FlexiGPT skill extension.
 //
 // Values are intentionally string-only. Consumers may build richer UI validation on top,
@@ -75,6 +82,21 @@ type SkillArgument struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Default     string `json:"default,omitempty"`
+}
+
+// SkillDocument is a materialized, provider-independent SKILL.md document.
+//
+// RawFrontmatter preserves fields that the runtime does not interpret.
+type SkillDocument struct {
+	Name         string          `json:"name"`
+	DisplayName  string          `json:"displayName,omitempty"`
+	Description  string          `json:"description"`
+	Insert       SkillInsert     `json:"insert"`
+	Arguments    []SkillArgument `json:"arguments,omitempty"`
+	Tags         []string        `json:"tags,omitempty"`
+	MarkdownBody string          `json:"markdownBody"`
+
+	RawFrontmatter map[string]any `json:"rawFrontmatter,omitempty"`
 }
 
 // SkillResourceInfo describes additional provider-defined resources associated with a skill.
@@ -103,6 +125,8 @@ type RenderSkillOut struct {
 	Description string      `json:"description,omitempty"`
 	DisplayName string      `json:"displayName,omitempty"`
 	Insert      SkillInsert `json:"insert"`
+
+	Tags []string `json:"tags,omitempty"`
 
 	Resources SkillResourceInfo `json:"resources"`
 
@@ -137,6 +161,8 @@ type SkillRecord struct {
 	Insert SkillInsert `json:"insert"`
 
 	Arguments []SkillArgument `json:"arguments,omitempty"`
+
+	Tags []string `json:"tags,omitempty"`
 
 	Resources SkillResourceInfo `json:"resources"`
 

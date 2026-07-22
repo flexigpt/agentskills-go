@@ -97,6 +97,8 @@ type ProviderSkillIndexRecord struct {
 
 	Arguments []SkillArgument `json:"arguments,omitempty"`
 
+	Tags []string `json:"tags,omitempty"`
+
 	Resources SkillResourceInfo `json:"resources"`
 
 	RawFrontmatter map[string]any `json:"rawFrontmatter,omitempty"`

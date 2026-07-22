@@ -346,6 +346,7 @@ func skillRecordFrom(def spec.SkillDef, idx spec.ProviderSkillIndexRecord) spec.
 		DisplayName:    idx.DisplayName,
 		Insert:         insert,
 		Arguments:      append([]spec.SkillArgument(nil), idx.Arguments...),
+		Tags:           append([]string(nil), idx.Tags...),
 		Resources:      cloneSkillResourceInfo(idx.Resources),
 		RawFrontmatter: idx.RawFrontmatter,
 		Warnings:       append([]string(nil), idx.Warnings...),

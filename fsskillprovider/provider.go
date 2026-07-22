@@ -201,6 +201,7 @@ func (p *Provider) Index(ctx context.Context, def spec.SkillDef) (spec.ProviderS
 		DisplayName:    meta.DisplayName,
 		Insert:         meta.Insert,
 		Arguments:      meta.Arguments,
+		Tags:           append([]string(nil), meta.Tags...),
 		Resources:      meta.Resources,
 		RawFrontmatter: meta.Props,
 		Warnings:       meta.Warnings,
