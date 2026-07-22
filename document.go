@@ -173,7 +173,7 @@ func RenderSkillDocument(
 	document spec.SkillDocument,
 	arguments map[string]string,
 ) (spec.RenderSkillOut, error) {
-	if err := validateSkillDocument(document); err != nil {
+	if err := ValidateSkillDocument(document); err != nil {
 		return spec.RenderSkillOut{}, fmt.Errorf(
 			"%w: invalid Skill document: %w",
 			spec.ErrInvalidArgument,
@@ -223,7 +223,7 @@ func RenderSkillDocument(
 func MarshalSkillDocument(
 	document spec.SkillDocument,
 ) ([]byte, error) {
-	if err := validateSkillDocument(document); err != nil {
+	if err := ValidateSkillDocument(document); err != nil {
 		return nil, fmt.Errorf(
 			"%w: invalid Skill document: %w",
 			spec.ErrInvalidArgument,
@@ -647,7 +647,7 @@ func parseSkillDocumentTags(raw any) (tags, tagWarnings []string) {
 	return output, warnings
 }
 
-func validateSkillDocument(document spec.SkillDocument) error {
+func ValidateSkillDocument(document spec.SkillDocument) error {
 	if err := validateSkillDocumentName(document.Name); err != nil {
 		return err
 	}
