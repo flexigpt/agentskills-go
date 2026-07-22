@@ -11,6 +11,7 @@ Runtime for [AgentSkills](https://agentskills.io/specification) in Go with plugg
 - [Overview](#overview)
 - [Features](#features)
 - [Supported SKILL.md extensions](#supported-skillmd-extensions)
+  - [Parsing, validation, and tolerance](#parsing-validation-and-tolerance)
 - [Prompt format](#prompt-format)
 - [Consumer responsibilities](#consumer-responsibilities)
 - [Filesystem skill provider](#filesystem-skill-provider)
@@ -40,7 +41,7 @@ That keeps the base prompt smaller while still allowing the model to discover an
   - session-scoped active skills
 - Provider abstraction via `spec.SkillProvider`
 - Reference provider:
-  - `providers/fsskillprovider`
+  - `fsskillprovider`
 - Tool integration via [`llmtools-go`](https://github.com/flexigpt/llmtools-go):
   - `skills-load`
   - `skills-unload`
@@ -53,6 +54,11 @@ That keeps the base prompt smaller while still allowing the model to discover an
 - FlexiGPT SKILL.md extensions:
   - `insert: instructions | user-message`; `instructions` is the default
   - named string `arguments` with optional defaults; `$name` and `{{name}}` substitution is done only for declared args
+  - `tags` for host/UI categorization
+- Provider-independent document APIs:
+  - `ParseSkillDocument`
+  - `RenderSkillDocument`
+  - `MarshalSkillDocument`
 
 ## Supported SKILL.md extensions
 
@@ -65,6 +71,7 @@ The supported semantic frontmatter fields are:
 - `description`: required discovery text
 - `insert`: optional insertion hint, either `instructions` or `user-message`
 - `arguments`: optional list of named string arguments
+- `tags`: optional list of non-empty strings for host/UI categorization
 
 Missing `insert` means `instructions`.
 
@@ -100,6 +107,40 @@ warnings. Runtime variables such as `${CLAUDE_SESSION_ID}` are not expanded.
 
 Claude Code style dynamic command expansion is not supported. The runtime never
 runs commands from `SKILL.md` during import, render, activation, or prompt generation.
+
+### Parsing, validation, and tolerance
+
+Use `ParseSkillDocument` when a skill document has already been materialized in
+memory, for example by a database, an API client, or an editor integration. It
+returns the normalized `spec.SkillDocument`, non-fatal warnings, and an error:
+
+```go
+document, warnings, err := agentskills.ParseSkillDocument(raw, spec.ParseSkillDocumentOptions{
+  ExpectedName: "summarize-text", // optional source-derived name check
+})
+_ = document
+_ = warnings
+_ = err
+```
+
+The parser rejects unsafe or structurally incomplete documents. A document must
+be at most `MaxSkillDocumentBytes` (2 MiB), valid UTF-8 without NUL bytes, have
+delimited readable YAML frontmatter, and provide a lowercase hyphenated `name`
+and a non-empty `description`. `ExpectedName`, when supplied, must match the
+frontmatter name exactly.
+
+Optional metadata is intentionally tolerant so a non-essential compatibility
+field does not make an otherwise usable skill unavailable. The parser removes a
+UTF-8 BOM, normalizes line endings, trims required name/description values, and
+returns warnings when it defaults an unsupported `insert`, ignores malformed or
+duplicate arguments/tags, truncates bounded optional text, or finds an empty
+body. Unknown frontmatter fields are retained in `RawFrontmatter`.
+
+`RenderSkillDocument` validates an already materialized document and applies
+declared argument substitutions without registering or activating a skill.
+`MarshalSkillDocument` validates and writes a canonical `SKILL.md` form while
+retaining unknown raw frontmatter fields. Both reject invalid in-memory document
+values rather than silently repairing them.
 
 ## Prompt format
 
@@ -163,10 +204,10 @@ skills. Consumers and wrappers should make those decisions explicitly.
 - If you expose `skills-runscript`, treat it as a separate tool capability governed
   by your product policy. The filesystem provider keeps script execution disabled
   by default.
-- If you need tags, enable/disable state, built-in state, source URIs, revisions, or
-  trust policy, keep them in your wrapper/store layer rather than in `SKILL.md`.
+- `tags` is basic SKILL.md metadata. Keep enable/disable state, built-in state,
+  source URIs, revisions, and trust policy in your wrapper/store layer.
 - If you need compatibility fields from other clients, read `RawFrontmatter`; this
-  runtime only gives behavior to `name`, `description`, `insert`, and `arguments`.
+  runtime only gives behavior to `name`, `description`, `insert`, `arguments`, and `tags`.
 
 ## Filesystem skill provider
 
@@ -269,6 +310,14 @@ The registry includes:
 
 The filesystem provider is intentionally thin and relies on `llmtools-go` for most of the operational sandboxing boundaries.
 
+- A filesystem skill root must be a directory. The provider keeps its canonical
+  location internal while lifecycle APIs continue to expose the exact location
+  supplied by the host.
+- `SKILL.md` must be a regular, non-symlink file. Its frontmatter `name` must
+  match the skill directory basename.
+- Regular non-symlink files below the skill root are indexed as resources. The
+  metadata lists at most `spec.MaxSkillResourceLocations` locations while still
+  reporting the total count.
 - `skills-readresource` uses `llmtools-go/fstool` and is scoped to the skill root with:
   - `allowedRoots = [skillRoot]`
   - `workBaseDir = skillRoot`
@@ -290,9 +339,11 @@ It demonstrates:
 
 - creating a runtime
 - adding a skill
+- parsing tolerant optional metadata and surfacing warnings
 - listing and prompting skills
 - creating a session with initial active skills
-- invoking skill tools
+- rendering a `user-message` template separately from instruction skills
+- rejecting malformed or source-name-mismatched filesystem documents
 
 ## Development
 
