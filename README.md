@@ -4,14 +4,16 @@
 [![lint](https://github.com/flexigpt/agentskills-go/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/flexigpt/agentskills-go/actions/workflows/lint.yml)
 [![test](https://github.com/flexigpt/agentskills-go/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/flexigpt/agentskills-go/actions/workflows/test.yml)
 
-Runtime for [AgentSkills](https://agentskills.io/specification) in Go with pluggable backend providers for skill lifecycle. Includes a bundled filesystem-backed provider.
+Runtime for [Agent Skills](https://agentskills.io/specification) in Go. It provides provider-independent `SKILL.md` document handling, a session-aware runtime, pluggable skill providers, and a bundled filesystem provider.
 
 ## Table of contents <!-- omit in toc -->
 
 - [Overview](#overview)
+- [Package layout](#package-layout)
 - [Features](#features)
 - [Supported SKILL.md extensions](#supported-skillmd-extensions)
   - [Parsing, validation, and tolerance](#parsing-validation-and-tolerance)
+  - [Rendering and insertion](#rendering-and-insertion)
 - [Prompt format](#prompt-format)
 - [Consumer responsibilities](#consumer-responsibilities)
 - [Filesystem skill provider](#filesystem-skill-provider)
@@ -23,340 +25,218 @@ Runtime for [AgentSkills](https://agentskills.io/specification) in Go with plugg
 
 ## Overview
 
-An AgentSkill is a directory or location containing a `SKILL.md` file with YAML frontmatter.
+An Agent Skill is a directory or provider-defined location containing a `SKILL.md` document with YAML frontmatter.
 
-This library is built around progressive disclosure of skills for LLM sessions:
+The runtime is built around progressive disclosure:
 
-- the runtime maintains a catalog of known skills
-- the catalog exposes metadata for discovery
-- a session can activate specific skills
-- only active skills disclose their full `SKILL.md` body into the prompt
+- The host indexes skills into a runtime-owned catalog.
+- Discovery prompts expose metadata for available instruction skills.
+- A session activates only the skills it needs.
+- Only active instruction skills disclose their full rendered body to the LLM prompt.
+- User-message templates remain host-controlled and are rendered separately.
 
-That keeps the base prompt smaller while still allowing the model to discover and load additional skills when needed.
+This keeps the base prompt small while allowing an LLM to discover and load relevant skills as needed.
+
+## Package layout
+
+The public API is intentionally split by responsibility:
+
+- [`document`](./document) provides provider-independent parsing, rendering, validation, and marshaling of materialized `SKILL.md` documents.
+- [`provider`](./provider) defines `SkillDef`, `SkillProvider`, resource metadata, and provider-level contracts.
+- [`provider/fs`](./provider/fs) provides the bundled filesystem-backed provider.
+- [`runtime`](./runtime) owns the skill catalog, host lifecycle APIs, sessions, prompts, and registry creation.
+- [`runtime/spec`](./runtime/spec) contains LLM-facing handles, session/tool contracts, tool definitions, and runtime errors.
+- [`runtime/internal/catalog`](./runtime/internal/catalog) and [`runtime/internal/session`](./runtime/internal/session) implement catalog identity, progressive body loading, session state, and tool behavior.
+
+Applications should integrate through the public packages. Provider-canonical keys and the runtime's internal catalog/session packages are implementation details.
 
 ## Features
 
-- Runtime for managing:
-  - skill catalog
-  - session-scoped active skills
-- Provider abstraction via `spec.SkillProvider`
-- Reference provider:
-  - `fsskillprovider`
-- Tool integration via [`llmtools-go`](https://github.com/flexigpt/llmtools-go):
+- Host lifecycle APIs for adding, listing, rendering, and removing skills.
+- Session-scoped active skills with configurable limits, TTL, capacity, and allowlists.
+- Progressive disclosure with lazy, cached skill-body loading.
+- A pluggable `provider.SkillProvider` abstraction.
+- A bundled filesystem provider at `provider/fs`.
+- LLM tool registry integration through [`llmtools-go`](https://github.com/flexigpt/llmtools-go):
   - `skills-load`
   - `skills-unload`
   - `skills-readresource`
-  - `skills-runscript`
-- Prompt generation APIs for:
-  - available skills
-  - active skills
-  - combined session prompt output
-- FlexiGPT SKILL.md extensions:
-  - `insert: instructions | user-message`; `instructions` is the default
-  - named string `arguments` with optional defaults; `$name` and `{{name}}` substitution is done only for declared args
-  - `tags` for host/UI categorization
-- Provider-independent document APIs:
-  - `ParseSkillDocument`
-  - `RenderSkillDocument`
-  - `MarshalSkillDocument`
+  - `skills-runscript` when at least one configured provider supports script execution
+- Prompt generation for available skills, active skills, and combined session state.
+- Provider-independent `SKILL.md` document APIs:
+  - `document.ParseSkillDocument`
+  - `document.RenderSkillDocument`
+  - `document.MarshalSkillDocument`
+- FlexiGPT `SKILL.md` extensions for insertion behavior, string arguments, and tags.
+- Resource discovery metadata through `provider.SkillResourceInfo`.
 
 ## Supported SKILL.md extensions
 
-This runtime supports normal Agent Skills-style `SKILL.md` files and a small extension
-for prompt-template use cases.
+The runtime supports normal Agent Skills-style documents and a small set of extensions for host-rendered templates.
 
-The supported semantic frontmatter fields are:
+The semantic frontmatter fields are:
 
-- `name`: required skill name
-- `description`: required discovery text
-- `insert`: optional insertion hint, either `instructions` or `user-message`
-- `arguments`: optional list of named string arguments
-- `tags`: optional list of non-empty strings for host/UI categorization
+- `name`: required lowercase hyphenated skill name.
+- `description`: required discovery text.
+- `insert`: optional insertion behavior, either `instructions` or `user-message`.
+- `arguments`: optional named string arguments with optional descriptions and defaults.
+- `tags`: optional non-empty strings for host or UI categorization.
 
-Missing `insert` means `instructions`.
+The first H1 in the Markdown body becomes the skill `DisplayName`. If no H1 exists, the skill name is used.
 
-Use `insert: instructions` for normal skills whose body should be injected into
-instruction/context material. This is the default.
+`insert: instructions` is the default. These skills are advertised in the LLM-facing prompt and can be activated in a session.
 
-Use `insert: user-message` when the skill body is a user-message template. These skills are
-not advertised in the normal LLM-facing skills prompt and cannot be loaded into a
-session with `skills-load`. Hosts should render them with `Runtime.RenderSkill` and
-place the rendered text in the user message area.
+`insert: user-message` is for host-rendered templates. These skills are not advertised in `SkillsPrompt`, cannot be activated with `skills-load`, and must be rendered by the host through `runtime.Runtime.RenderSkill` before their text is placed in a user-message area.
 
-The runtime preserves the full parsed frontmatter in `RawFrontmatter`, but it does
-not assign behavior to other fields. Wrappers can inspect or use those fields if
-they want compatibility with another client.
+Declared arguments support `$name`, `{{name}}`, and `{{ name }}` placeholders. Only declared arguments are substituted. `\$name` renders as a literal `$name`. Unknown placeholders remain unchanged and are returned as warnings.
 
-Example frontmatter:
+The runtime does not expand environment variables, runtime variables, shell syntax, or Claude Code-style dynamic commands. Command-like text in a `SKILL.md` body remains text.
 
-```yaml
-name: summarize-text
-description: Summarizes pasted text. Use when the user wants a concise summary.
-insert: user-message
-arguments:
-  - name: text
-    description: Text to summarize.
-  - name: tone
-    description: Summary tone.
-    default: concise
-```
-
-The body may use `$name`, `{{name}}`, or `{{ name }}` placeholders. Only declared
-arguments are substituted. Unknown placeholders are left unchanged and reported as
-warnings. Runtime variables such as `${CLAUDE_SESSION_ID}` are not expanded.
-
-Claude Code style dynamic command expansion is not supported. The runtime never
-runs commands from `SKILL.md` during import, render, activation, or prompt generation.
+Unknown frontmatter fields are retained in `RawFrontmatter` for wrappers that need compatibility metadata from another client or skill ecosystem.
 
 ### Parsing, validation, and tolerance
 
-Use `ParseSkillDocument` when a skill document has already been materialized in
-memory, for example by a database, an API client, or an editor integration. It
-returns the normalized `spec.SkillDocument`, non-fatal warnings, and an error:
+Use `document.ParseSkillDocument` when a `SKILL.md` document has already been materialized by a database, editor, API client, or another provider.
 
-```go
-document, warnings, err := agentskills.ParseSkillDocument(raw, spec.ParseSkillDocumentOptions{
-  ExpectedName: "summarize-text", // optional source-derived name check
-})
-_ = document
-_ = warnings
-_ = err
-```
+The parser requires:
 
-The parser rejects unsafe or structurally incomplete documents. A document must
-be at most `MaxSkillDocumentBytes` (2 MiB), valid UTF-8 without NUL bytes, have
-delimited readable YAML frontmatter, and provide a lowercase hyphenated `name`
-and a non-empty `description`. `ExpectedName`, when supplied, must match the
-frontmatter name exactly.
+- A document no larger than `document.MaxSkillDocumentBytes`, currently 2 MiB.
+- Valid UTF-8 without NUL bytes.
+- Delimited, readable YAML frontmatter.
+- A valid `name` and non-empty `description`.
+- A matching normalized name when `ParseSkillDocumentOptions.ExpectedName` is supplied.
 
-Optional metadata is intentionally tolerant so a non-essential compatibility
-field does not make an otherwise usable skill unavailable. The parser removes a
-UTF-8 BOM, normalizes line endings, trims required name/description values, and
-returns warnings when it defaults an unsupported `insert`, ignores malformed or
-duplicate arguments/tags, truncates bounded optional text, or finds an empty
-body. Unknown frontmatter fields are retained in `RawFrontmatter`.
+The parser is intentionally tolerant for optional metadata. It removes a UTF-8 BOM, normalizes body line endings, trims required text values, and returns warnings when it defaults an unsupported `insert` value, ignores malformed optional arguments or tags, truncates bounded optional text, or encounters an empty body.
 
-`RenderSkillDocument` validates an already materialized document and applies
-declared argument substitutions without registering or activating a skill.
-`MarshalSkillDocument` validates and writes a canonical `SKILL.md` form while
-retaining unknown raw frontmatter fields. Both reject invalid in-memory document
-values rather than silently repairing them.
+`document.RenderSkillDocument` renders a materialized document without registering it in a runtime. `document.MarshalSkillDocument` writes a canonical `SKILL.md` representation while preserving unknown frontmatter fields. Both reject invalid in-memory documents instead of silently repairing them.
+
+The runnable document API example is [`TestReadmeDocumentWorkflow`](./runtime/internal/integration/readme_document_test.go).
+
+### Rendering and insertion
+
+There are two intended rendering paths:
+
+- Use `document.RenderSkillDocument` for a materialized document that has not been registered with a runtime.
+- Use `runtime.Runtime.RenderSkill` for a skill already present in the runtime catalog.
+
+`RenderSkill` accepts the exact registered `provider.SkillDef` and optional string argument values. It returns rendered text, insertion behavior, declared arguments, applied values, resource metadata, preserved frontmatter, and warnings.
+
+Active instruction skills are rendered with their declared default argument values when the runtime builds an active-skills prompt. Hosts can provide explicit values through `RenderSkillParams.Arguments` when rendering a skill for a UI or message composer.
+
+Neither rendering path activates a skill, reads a resource, or executes a script.
 
 ## Prompt format
 
-Prompt output is structured plain text intended for LLM consumption.
+`Runtime.SkillsPrompt` produces structured plain text for LLM consumption. It deliberately uses explicit delimiters and labeled fields instead of XML encoding.
 
-It is deliberately not XML. Instead, it uses explicit start and end delimiters plus labeled fields so the model can interpret the structure clearly without paying the overhead of XML encoding.
+The prompt can contain:
+
+- An `<<<AVAILABLE_SKILLS>>>` section with prompt-visible skill names, user-provided locations, and descriptions.
+- An `<<<ACTIVE_SKILLS>>>` section with active skill names and their rendered bodies.
+- A combined `<<<SKILLS_PROMPT>>>` wrapper when both sections are emitted.
 
 Current behavior:
 
-- available skills are sorted by prompt-visible `name`, then `location`
-- available skills include only `insert: instructions` skills
-- active skills preserve session active order
-- empty sections render as `(none)`
-- when both sections are requested together, the runtime wraps them in a combined `<<<SKILLS_PROMPT>>> ... <<<END_SKILLS_PROMPT>>>` block
+- Available skills are sorted by LLM-visible name, then user-provided location.
+- Active skills preserve activation order.
+- Available prompts only include `insert: instructions` skills.
+- Active prompts only contain active instruction skills.
+- Empty sections render as `(none)`.
+- A request for only active or only inactive skills returns that section as the root document.
+- A session-scoped `SkillActivityAny` request produces both active and inactive sections inside the combined wrapper.
 
-Typical shapes look like this.
+`SkillFilter.NamePrefix` matches the LLM-visible `spec.SkillHandle.Name`. `SkillListFilter.NamePrefix` matches the host-facing `provider.SkillDef.Name`.
 
-Available skills:
+When multiple skills would have the same LLM-visible name and location, the runtime computes an opaque suffix such as `skill-name#1a2b3c4d`. The suffix is derived from host-visible definitions and does not expose provider-canonical locations.
 
-```text
-<<<AVAILABLE_SKILLS>>>
-name: hello-skill
-location: /abs/path/to/hello-skill
-description: Says hello
----
-name: my-skill
-location: /abs/path/to/my-skill
-description: My Skill
-<<<END_AVAILABLE_SKILLS>>>
-```
-
-Active skills:
-
-```text
-<<<ACTIVE_SKILLS>>>
-name: hello-skill
-body:
-# Hello Skill
-
-Use this skill when the user wants a greeting.
-<!-- SKILL SEPARATOR -->
-name: my-skill
-body:
-# My Skill
-
-Use this skill when the user wants to deal with me.
-<<<END_ACTIVE_SKILLS>>>
-```
+See [`TestRuntime_SkillsPrompt_SectionsOrderingAndFiltering`](./runtime/internal/integration/runtime_test.go) and [`TestRuntime_SkillsPrompt_NamePrefixIsLLMHandleNotHostName`](./runtime/internal/integration/runtime_test.go) for executable prompt-format and filtering coverage.
 
 ## Consumer responsibilities
 
-This library does not decide how your chat product stores, displays, or executes
-skills. Consumers and wrappers should make those decisions explicitly.
+The runtime intentionally does not decide how an application stores, displays, or trusts.
 
-- If `RenderSkill` returns `Insert == instructions`, put the rendered text in your
-  instruction/context area.
-- If `RenderSkill` returns `Insert == user-message`, put the rendered text in your
-  user message composer/body.
-- If a skill body contains command examples or Claude-style dynamic command text,
-  this runtime leaves the body as text. It does not execute or sanitize it.
-- If you expose `skills-runscript`, treat it as a separate tool capability governed
-  by your product policy. The filesystem provider keeps script execution disabled
-  by default.
-- `tags` is basic SKILL.md metadata. Keep enable/disable state, built-in state,
-  source URIs, revisions, and trust policy in your wrapper/store layer.
-- If you need compatibility fields from other clients, read `RawFrontmatter`; this
-  runtime only gives behavior to `name`, `description`, `insert`, `arguments`, and `tags`.
+Consumers should:
+
+- Use `provider.SkillDef` for host lifecycle operations such as `AddSkill`, `RemoveSkill`, `ListSkills`, and initial session configuration.
+- Use `spec.SkillHandle` only for LLM-facing prompts and skill tools such as `skills-load`, `skills-unload`, `skills-readresource`, and `skills-runscript`.
+- Preserve exact host-provided definitions. Lifecycle APIs intentionally do not expose provider canonicalization as a host-facing identity.
+- Place rendered `instructions` text in instruction or context material.
+- Place rendered `user-message` text in the user message composer or message body.
+- Use `runtime.WithSessionAllowedSkills` when a session must be limited to a known set of host-defined skills.
+- Treat script execution as a separate product capability with explicit user, trust, and policy decisions.
+- Keep product-specific state such as enabled status, source URI, revision, trust level, and marketplace metadata in the application layer.
+- Inspect `RawFrontmatter` when compatibility fields from other tools are needed.
+
+Close sessions when a conversation ends. The runtime also supports session TTL, maximum-session, and maximum-active-skill configuration.
 
 ## Filesystem skill provider
 
+The bundled provider is available from [`provider/fs`](./provider/fs). Use `fs.Type` when constructing a filesystem `provider.SkillDef`.
+
+The filesystem provider indexes a skill directory, validates its `SKILL.md`, discovers additional resources, and delegates resource reads and script execution sandboxing to `llmtools-go`.
+
 ### Quickstart
 
-Create a runtime with the filesystem provider:
+- A quick walkthrough is at: [`TestReadmeQuickstart`](./runtime/internal/integration/quickstart_test.go).
 
-```go
-fsp, _ := fsskillprovider.New() // RunScript disabled by default
+It demonstrates the complete public API flow:
 
-rt, _ := agentskills.New(
-  agentskills.WithProvider(fsp),
-)
-```
+- Create an `fs.Provider` and a `runtime.Runtime`.
+- Add instruction skills and a `user-message` template.
+- List instruction skills through the host lifecycle API.
+- Build an available-skills prompt.
+- Create an allowlisted session with an initially active skill.
+- Build an active-skills prompt and a combined session prompt.
+- Render a `user-message` template with caller-supplied arguments.
+- Create a session-specific `llmtools-go` registry.
+- Close the session.
 
-Add a skill to the catalog:
+Run that example directly with `go test ./runtime/internal/integration -run TestReadmeQuickstart`.
 
-```go
-rec, err := rt.AddSkill(ctx, spec.SkillDef{
-  Type:     "fs",
-  Name:     "hello-skill",
-  Location: "/abs/path/to/hello-skill",
-})
-_ = rec
-_ = err
-```
-
-Build the available-skills prompt for discovery only:
-
-```go
-prompt, _ := rt.SkillsPrompt(ctx, &agentskills.SkillFilter{
-  Activity: spec.SkillActivityInactive, // without SessionID, treated as all known/inactive skills
-})
-_ = prompt
-```
-
-Create a session with initial active skills:
-
-```go
-sid, active, err := rt.NewSession(ctx,
-  agentskills.WithSessionActiveSkills([]spec.SkillDef{rec.Def}),
-)
-_ = sid
-_ = active
-_ = err
-```
-
-Build the active-skills prompt for that session:
-
-```go
-activePrompt, _ := rt.SkillsPrompt(ctx, &agentskills.SkillFilter{
-  SessionID: sid,
-  Activity:  spec.SkillActivityActive,
-})
-_ = activePrompt
-```
-
-Render a skill for a chat UI:
-
-```go
-rendered, err := rt.RenderSkill(ctx, agentskills.RenderSkillParams{
-  Def: rec.Def,
-  Arguments: map[string]string{
-    "text": "Long pasted content...",
-    "tone": "concise",
-  },
-})
-_ = rendered
-_ = err
-```
-
-If `rendered.Insert` is `spec.SkillInsertUserMessage`, place `rendered.Text` in the user message area.
-If it is `spec.SkillInsertInstructions`, place it in instruction/context material.
-
-Build a combined prompt for a session:
-
-```go
-prompt, _ := rt.SkillsPrompt(ctx, &agentskills.SkillFilter{
-  SessionID: sid,
-  Activity:  spec.SkillActivityAny,
-})
-_ = prompt
-```
-
-Create a tool registry for an LLM session:
-
-```go
-reg, _ := rt.NewSessionRegistry(ctx, sid)
-_ = reg
-```
-
-The registry includes:
-
-- `skills-load`
-- `skills-unload`
-- `skills-readresource`
-- `skills-runscript`
+The separate [`TestReadmeDocumentWorkflow`](./runtime/internal/integration/document_test.go) example covers provider-independent document parsing, rendering, and marshaling.
 
 ### Security notes
 
-The filesystem provider is intentionally thin and relies on `llmtools-go` for most of the operational sandboxing boundaries.
+The filesystem provider is intentionally thin and delegates generic filesystem and execution hardening to `llmtools-go`.
 
-- A filesystem skill root must be a directory. The provider keeps its canonical
-  location internal while lifecycle APIs continue to expose the exact location
-  supplied by the host.
-- `SKILL.md` must be a regular, non-symlink file. Its frontmatter `name` must
-  match the skill directory basename.
-- Regular non-symlink files below the skill root are indexed as resources. The
-  metadata lists at most `spec.MaxSkillResourceLocations` locations while still
-  reporting the total count.
-- `skills-readresource` uses `llmtools-go/fstool` and is scoped to the skill root with:
-  - `allowedRoots = [skillRoot]`
-  - `workBaseDir = skillRoot`
-- `skills-runscript` uses `llmtools-go/exectool` and is scoped similarly
-- script execution is disabled by default in the filesystem provider
-- enabling script execution is a host decision and is separate from SKILL.md rendering:
-
-```go
-fsskillprovider.WithRunScripts(true)
-```
+- A skill root must resolve to a directory.
+- The provider keeps canonical filesystem locations internal. Host records and LLM handles retain the user-provided `SkillDef.Location`.
+- `SKILL.md` must be a regular non-symlink file.
+- The `SKILL.md` frontmatter name must match both the skill directory basename and `SkillDef.Name`.
+- Regular non-symlink files below the skill root, excluding `SKILL.md`, are indexed as resources.
+- `provider.SkillResourceInfo.Locations` is capped at `provider.MaxSkillResourceLocations`, while `TotalCount` reports the complete count.
+- `skills-readresource` is scoped to the skill root through `llmtools-go/fstool` using the skill root as both an allowed root and work base directory.
+- The LLM-facing resource tool requires the selected skill to be active in the current session.
+- Script execution is disabled by default.
+- Enabling filesystem script execution with `fs.WithRunScripts(true)` is an explicit host decision.
+- `skills-runscript` is registered only when the runtime has a provider that reports script support.
+- Script execution is scoped through `llmtools-go/exectool`, including its execution and run-script policies.
+- By default, the filesystem provider permits `.sh` and `.py` scripts on non-Windows systems, and `.ps1` and `.py` scripts on Windows.
+- Scripts may currently live anywhere under the skill root. Applications that need stricter layout rules should enforce them through provider policy or a custom provider.
 
 ## End-to-end examples
 
-Working end-to-end coverage lives in:
+The examples are executable tests so documentation and API behavior evolve together.
 
-- [fs test](./internal/integration/fs_test.go)
-
-It demonstrates:
-
-- creating a runtime
-- adding a skill
-- parsing tolerant optional metadata and surfacing warnings
-- listing and prompting skills
-- creating a session with initial active skills
-- rendering a `user-message` template separately from instruction skills
-- rejecting malformed or source-name-mismatched filesystem documents
+- [`TestReadmeDocumentWorkflow`](./runtime/internal/integration/document_test.go) covers parse, render, marshal, and unknown-frontmatter preservation.
+- [`TestReadmeQuickstart`](./runtime/internal/integration/quickstart_test.go) covers the current public filesystem runtime flow.
+- [`TestReadmeRunScriptConfiguration`](./runtime/internal/integration/quickstart_test.go) verifies that filesystem script capability propagates to the runtime.
+- [`TestBasicRuntimeFlow`](./runtime/internal/integration/basic_test.go) covers a compact active-skill lifecycle.
+- [`TestRuntime_FSProvider_EndToEnd`](./runtime/internal/integration/fs_test.go) covers filesystem indexing, prompting, session activation, and registry creation.
+- [`TestRuntime_FSProvider_TolerantDocumentAndTemplateWorkflow`](./runtime/internal/integration/fs_test.go) covers tolerant optional metadata, resources, warnings, templates, and source-name validation.
+- [`runtime/internal/session/tools_impl_test.go`](./runtime/internal/session/tools_impl_test.go) covers load, unload, resource-read, and script-run tool behavior.
 
 ## Development
 
-- Formatting follows `gofumpt` and `golines` via `golangci-lint`. Rules are in [.golangci.yml](.golangci.yml).
-- Useful scripts are defined in `taskfile.yml`; requires [Task](https://taskfile.dev/).
-- Bug reports and PRs are welcome:
-  - Keep the public API small and intentional.
-  - Avoid leaking provider‑specific types through the public surface; put them under `internal/`.
-  - Please run tests and linters before sending a PR.
+- Formatting and linting are configured through `golangci-lint`; see [`.golangci.yml`](.golangci.yml).
+- Repository tasks are defined in [`taskfile.yml`](taskfile.yml) and require [Task](https://taskfile.dev/).
+- Keep host lifecycle types, LLM-facing handles, and provider-canonical keys separate.
+- Do not expose provider-specific canonicalization through host or LLM-facing application APIs.
+- Add or update an integration test whenever README-visible behavior changes.
+- Run tests and linters before opening a pull request.
 
 ## License
 
-Copyright (c) 2026 - Present - Pankaj Pipada
+Copyright (c) 2026-present, Pankaj Pipada.
 
-All source code in this repository, unless otherwise noted, is licensed under the MIT License.
-See [LICENSE](./LICENSE) for details.
+All source code in this repository, unless otherwise noted, is licensed under the MIT License. See [LICENSE](./LICENSE) for details.
