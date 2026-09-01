@@ -140,3 +140,27 @@ type UnloadArgs struct {
 type UnloadOut struct {
 	ActiveSkills []SkillHandle `json:"activeSkills"`
 }
+
+type ReadResourceArgs struct {
+	SkillName     string `json:"skillName"`
+	SkillLocation string `json:"skillLocation"`
+
+	// ResourceLocation is provider-defined; for fs providers this is typically a relative file path.
+	ResourceLocation string `json:"resourceLocation"`
+
+	Encoding provider.ReadResourceEncoding `json:"encoding,omitempty"` // default: text
+}
+
+type RunScriptArgs struct {
+	SkillName     string `json:"skillName"`
+	SkillLocation string `json:"skillLocation"`
+
+	// ScriptLocation is provider-defined; for fs providers this is typically a relative script file path.
+	ScriptLocation string `json:"scriptLocation"`
+
+	Args []string          `json:"args,omitempty"`
+	Env  map[string]string `json:"env,omitempty"`
+
+	// WorkDir is provider-defined; for fs providers this is typically a relative directory under the skill base.
+	WorkDir string `json:"workDir,omitempty"`
+}

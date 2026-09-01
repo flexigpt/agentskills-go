@@ -39,30 +39,6 @@ const (
 	ReadResourceEncodingBinary ReadResourceEncoding = "binary"
 )
 
-type ReadResourceArgs struct {
-	SkillName     string `json:"skillName"`
-	SkillLocation string `json:"skillLocation"`
-
-	// ResourceLocation is provider-defined; for fs providers this is typically a relative file path.
-	ResourceLocation string `json:"resourceLocation"`
-
-	Encoding ReadResourceEncoding `json:"encoding,omitempty"` // default: text
-}
-
-type RunScriptArgs struct {
-	SkillName     string `json:"skillName"`
-	SkillLocation string `json:"skillLocation"`
-
-	// ScriptLocation is provider-defined; for fs providers this is typically a relative script file path.
-	ScriptLocation string `json:"scriptLocation"`
-
-	Args []string          `json:"args,omitempty"`
-	Env  map[string]string `json:"env,omitempty"`
-
-	// WorkDir is provider-defined; for fs providers this is typically a relative directory under the skill base.
-	WorkDir string `json:"workDir,omitempty"`
-}
-
 type RunScriptOut struct {
 	Location   string `json:"location"`
 	ExitCode   int    `json:"exitCode"`
@@ -92,18 +68,20 @@ type SkillResourceInfo struct {
 	MoreLocations bool `json:"moreLocations"`
 }
 
-// ProviderSkillKey is the canonical identity used by the catalog/session/provider plumbing.
+// ProviderSkillKey is the provider/runtime canonical identity.
 //
-// Providers may canonicalize Location (e.g. abs+EvalSymlinks for fs).
-// This canonical form MUST NOT be exposed to host/lifecycle APIs.
+// It is public because custom provider implementations must create and consume
+// it. It is not a host identity or an LLM-facing skill handle.
 type ProviderSkillKey struct {
 	Type     string `json:"type"`
 	Name     string `json:"name"`
 	Location string `json:"location"`
 }
 
-// ProviderSkillIndexRecord is the catalog record returned by providers during indexing.
-// It carries the canonical ProviderSkillKey used.
+// ProviderSkillIndexRecord is the provider-to-runtime indexing result.
+//
+// Name must equal the input SkillDef.Name. Key may canonicalize Location but
+// must preserve the input SkillDef.Type and SkillDef.Name.
 type ProviderSkillIndexRecord struct {
 	Key ProviderSkillKey `json:"key"`
 

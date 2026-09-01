@@ -8,20 +8,6 @@ import (
 
 var doubleBracePlaceholderRE = regexp.MustCompile(`\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}`)
 
-func SkillInsertMatches(allowed []SkillInsert, actual SkillInsert) bool {
-	normActual, ok := NormalizeSkillInsert(actual)
-	if !ok {
-		return false
-	}
-	for _, candidate := range allowed {
-		normCandidate, ok := NormalizeSkillInsert(candidate)
-		if ok && normCandidate == normActual {
-			return true
-		}
-	}
-	return false
-}
-
 func NormalizeSkillInsert(v SkillInsert) (SkillInsert, bool) {
 	switch SkillInsert(strings.ToLower(strings.TrimSpace(string(v)))) {
 	case "":

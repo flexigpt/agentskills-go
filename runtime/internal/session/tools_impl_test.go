@@ -354,34 +354,34 @@ func TestTools_toolRead_Validations_DefaultEncoding_CanonicalKeyPassedToProvider
 
 	cases := []struct {
 		name  string
-		args  provider.ReadResourceArgs
+		args  spec.ReadResourceArgs
 		isErr func(error) bool
 		check func(t *testing.T)
 	}{
 		{
 			name: "rejects_missing_skill_fields",
-			args: provider.ReadResourceArgs{SkillName: "", SkillLocation: "x", ResourceLocation: "r"},
+			args: spec.ReadResourceArgs{SkillName: "", SkillLocation: "x", ResourceLocation: "r"},
 			isErr: func(err error) bool {
 				return errors.Is(err, spec.ErrInvalidRuntimeArgument)
 			},
 		},
 		{
 			name: "rejects_missing_resource_location",
-			args: provider.ReadResourceArgs{SkillName: "a", SkillLocation: relStr, ResourceLocation: ""},
+			args: spec.ReadResourceArgs{SkillName: "a", SkillLocation: relStr, ResourceLocation: ""},
 			isErr: func(err error) bool {
 				return errors.Is(err, spec.ErrInvalidRuntimeArgument)
 			},
 		},
 		{
 			name: unknownHandleStr,
-			args: provider.ReadResourceArgs{SkillName: nopeStr, SkillLocation: "x", ResourceLocation: "r"},
+			args: spec.ReadResourceArgs{SkillName: nopeStr, SkillLocation: "x", ResourceLocation: "r"},
 			isErr: func(err error) bool {
 				return errors.Is(err, spec.ErrSkillNotFound)
 			},
 		},
 		{
 			name: "not_active",
-			args: provider.ReadResourceArgs{SkillName: "a", SkillLocation: relStr, ResourceLocation: "r"},
+			args: spec.ReadResourceArgs{SkillName: "a", SkillLocation: relStr, ResourceLocation: "r"},
 			check: func(t *testing.T) {
 				t.Helper()
 				if _, err := s.toolUnload(t.Context(), spec.UnloadArgs{All: true}); err != nil {
@@ -394,7 +394,7 @@ func TestTools_toolRead_Validations_DefaultEncoding_CanonicalKeyPassedToProvider
 		},
 		{
 			name: "provider_not_found",
-			args: provider.ReadResourceArgs{SkillName: "a", SkillLocation: relStr, ResourceLocation: "r"},
+			args: spec.ReadResourceArgs{SkillName: "a", SkillLocation: relStr, ResourceLocation: "r"},
 			check: func(t *testing.T) {
 				t.Helper()
 				// Re-activate then remove provider.
@@ -409,7 +409,7 @@ func TestTools_toolRead_Validations_DefaultEncoding_CanonicalKeyPassedToProvider
 		},
 		{
 			name: "success_default_encoding_and_canonical_key_passed",
-			args: provider.ReadResourceArgs{
+			args: spec.ReadResourceArgs{
 				SkillName:        "a",
 				SkillLocation:    relStr,
 				ResourceLocation: "x.txt",
@@ -426,7 +426,7 @@ func TestTools_toolRead_Validations_DefaultEncoding_CanonicalKeyPassedToProvider
 		},
 		{
 			name: "success_explicit_binary_encoding",
-			args: provider.ReadResourceArgs{
+			args: spec.ReadResourceArgs{
 				SkillName:        "a",
 				SkillLocation:    relStr,
 				ResourceLocation: "y.bin",
@@ -497,34 +497,34 @@ func TestTools_toolRunScript_Validations_ArgsEnvWorkDirPassed(t *testing.T) {
 	slocation := "s.sh"
 	cases := []struct {
 		name  string
-		args  provider.RunScriptArgs
+		args  spec.RunScriptArgs
 		isErr func(error) bool
 		check func(t *testing.T)
 	}{
 		{
 			name: "rejects_missing_skill_fields",
-			args: provider.RunScriptArgs{SkillName: "", SkillLocation: "x", ScriptLocation: slocation},
+			args: spec.RunScriptArgs{SkillName: "", SkillLocation: "x", ScriptLocation: slocation},
 			isErr: func(err error) bool {
 				return errors.Is(err, spec.ErrInvalidRuntimeArgument)
 			},
 		},
 		{
 			name: "rejects_missing_script_location",
-			args: provider.RunScriptArgs{SkillName: "a", SkillLocation: relStr, ScriptLocation: ""},
+			args: spec.RunScriptArgs{SkillName: "a", SkillLocation: relStr, ScriptLocation: ""},
 			isErr: func(err error) bool {
 				return errors.Is(err, spec.ErrInvalidRuntimeArgument)
 			},
 		},
 		{
 			name: unknownHandleStr,
-			args: provider.RunScriptArgs{SkillName: nopeStr, SkillLocation: "x", ScriptLocation: slocation},
+			args: spec.RunScriptArgs{SkillName: nopeStr, SkillLocation: "x", ScriptLocation: slocation},
 			isErr: func(err error) bool {
 				return errors.Is(err, spec.ErrSkillNotFound)
 			},
 		},
 		{
 			name: "not_active",
-			args: provider.RunScriptArgs{SkillName: "a", SkillLocation: relStr, ScriptLocation: slocation},
+			args: spec.RunScriptArgs{SkillName: "a", SkillLocation: relStr, ScriptLocation: slocation},
 			check: func(t *testing.T) {
 				t.Helper()
 				if _, err := s.toolUnload(t.Context(), spec.UnloadArgs{All: true}); err != nil {
@@ -537,7 +537,7 @@ func TestTools_toolRunScript_Validations_ArgsEnvWorkDirPassed(t *testing.T) {
 		},
 		{
 			name: "provider_not_found",
-			args: provider.RunScriptArgs{SkillName: "a", SkillLocation: relStr, ScriptLocation: slocation},
+			args: spec.RunScriptArgs{SkillName: "a", SkillLocation: relStr, ScriptLocation: slocation},
 			check: func(t *testing.T) {
 				t.Helper()
 				if _, err := s.toolLoad(t.Context(), spec.LoadArgs{Skills: []spec.SkillHandle{h}}); err != nil {
@@ -551,7 +551,7 @@ func TestTools_toolRunScript_Validations_ArgsEnvWorkDirPassed(t *testing.T) {
 		},
 		{
 			name: "success_args_env_workdir_and_canonical_key_passed",
-			args: provider.RunScriptArgs{
+			args: spec.RunScriptArgs{
 				SkillName:      "a",
 				SkillLocation:  relStr,
 				ScriptLocation: "scripts/x.sh",
@@ -628,10 +628,10 @@ func TestTools_ClosedSessionShortCircuitsAllTools(t *testing.T) {
 	if _, err := s.toolUnload(t.Context(), spec.UnloadArgs{}); !errors.Is(err, spec.ErrSessionNotFound) {
 		t.Fatalf("toolUnload on closed session: expected ErrSessionNotFound, got %v", err)
 	}
-	if _, err := s.toolRead(t.Context(), provider.ReadResourceArgs{}); !errors.Is(err, spec.ErrSessionNotFound) {
+	if _, err := s.toolRead(t.Context(), spec.ReadResourceArgs{}); !errors.Is(err, spec.ErrSessionNotFound) {
 		t.Fatalf("toolRead on closed session: expected ErrSessionNotFound, got %v", err)
 	}
-	if _, err := s.toolRunScript(t.Context(), provider.RunScriptArgs{}); !errors.Is(err, spec.ErrSessionNotFound) {
+	if _, err := s.toolRunScript(t.Context(), spec.RunScriptArgs{}); !errors.Is(err, spec.ErrSessionNotFound) {
 		t.Fatalf("toolRunScript on closed session: expected ErrSessionNotFound, got %v", err)
 	}
 }

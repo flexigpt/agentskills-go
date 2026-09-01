@@ -2,7 +2,7 @@ package document
 
 import "errors"
 
-var errInvalidArgument = errors.New("invalid argument")
+var errInvalidDocumentArgument = errors.New("invalid document argument")
 
 // SkillInsert describes where a rendered SKILL.md body should be inserted by the consumer.
 //

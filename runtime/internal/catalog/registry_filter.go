@@ -33,7 +33,7 @@ func (f PromptFilter) match(e *entry) bool {
 			return false
 		}
 	}
-	if len(f.Inserts) > 0 && !document.SkillInsertMatches(f.Inserts, e.idx.Insert) {
+	if len(f.Inserts) > 0 && !skillInsertMatches(f.Inserts, e.idx.Insert) {
 		return false
 	}
 
@@ -75,7 +75,7 @@ func (f UserFilter) match(e *entry) bool {
 	if len(f.Types) > 0 && !slices.Contains(f.Types, e.idx.Key.Type) {
 		return false
 	}
-	if len(f.Inserts) > 0 && !document.SkillInsertMatches(f.Inserts, e.idx.Insert) {
+	if len(f.Inserts) > 0 && !skillInsertMatches(f.Inserts, e.idx.Insert) {
 		return false
 	}
 	if f.NamePrefix != "" && len(e.def.Name) >= len(f.NamePrefix) {
@@ -93,4 +93,18 @@ func (f UserFilter) match(e *entry) bool {
 		return false
 	}
 	return true
+}
+
+func skillInsertMatches(allowed []document.SkillInsert, actual document.SkillInsert) bool {
+	normActual, ok := document.NormalizeSkillInsert(actual)
+	if !ok {
+		return false
+	}
+	for _, candidate := range allowed {
+		normCandidate, ok := document.NormalizeSkillInsert(candidate)
+		if ok && normCandidate == normActual {
+			return true
+		}
+	}
+	return false
 }

@@ -173,7 +173,7 @@ func RenderSkillDocument(
 	if err := ValidateSkillDocument(document); err != nil {
 		return RenderSkillDocumentOut{}, fmt.Errorf(
 			"%w: invalid Skill document: %w",
-			errInvalidArgument,
+			errInvalidDocumentArgument,
 			err,
 		)
 	}
@@ -182,7 +182,7 @@ func RenderSkillDocument(
 	if !ok {
 		return RenderSkillDocumentOut{}, fmt.Errorf(
 			"%w: invalid insert behavior %q",
-			errInvalidArgument,
+			errInvalidDocumentArgument,
 			document.Insert,
 		)
 	}
@@ -223,7 +223,7 @@ func MarshalSkillDocument(
 	if err := ValidateSkillDocument(document); err != nil {
 		return nil, fmt.Errorf(
 			"%w: invalid Skill document: %w",
-			errInvalidArgument,
+			errInvalidDocumentArgument,
 			err,
 		)
 	}
@@ -301,6 +301,81 @@ func MarshalSkillDocument(
 		)
 	}
 	return raw, nil
+}
+
+func ValidateSkillDocument(document SkillDocument) error {
+	if err := validateSkillDocumentName(document.Name); err != nil {
+		return err
+	}
+	if err := validateSkillDocumentDescription(document.Description); err != nil {
+		return err
+	}
+	if document.DisplayName != "" {
+		if strings.TrimSpace(document.DisplayName) != document.DisplayName {
+			return errors.New("displayName has leading or trailing whitespace")
+		}
+		if len(document.DisplayName) > maxSkillDisplayNameBytes {
+			return fmt.Errorf(
+				"displayName exceeds %d bytes",
+				maxSkillDisplayNameBytes,
+			)
+		}
+	}
+	if _, ok := NormalizeSkillInsert(document.Insert); !ok {
+		return fmt.Errorf("unsupported insert value %q", document.Insert)
+	}
+	if len(document.Arguments) > maxSkillArguments {
+		return fmt.Errorf(
+			"arguments exceeds %d entries",
+			maxSkillArguments,
+		)
+	}
+
+	seenArguments := make(map[string]struct{}, len(document.Arguments))
+	for index, argument := range document.Arguments {
+		if argument.Name != strings.TrimSpace(argument.Name) ||
+			!isValidSkillArgumentName(argument.Name) {
+			return fmt.Errorf("arguments[%d].name is invalid", index)
+		}
+		if _, duplicate := seenArguments[argument.Name]; duplicate {
+			return fmt.Errorf("duplicate argument %q", argument.Name)
+		}
+		seenArguments[argument.Name] = struct{}{}
+
+		if len(argument.Description) > maxSkillArgumentBytes ||
+			len(argument.Default) > maxSkillArgumentBytes {
+			return fmt.Errorf(
+				"arguments[%d] description or default exceeds %d bytes",
+				index,
+				maxSkillArgumentBytes,
+			)
+		}
+	}
+
+	if len(document.Tags) > maxSkillTags {
+		return fmt.Errorf("tags exceeds %d entries", maxSkillTags)
+	}
+	seenTags := make(map[string]struct{}, len(document.Tags))
+	for index, tag := range document.Tags {
+		if tag == "" || tag != strings.TrimSpace(tag) {
+			return fmt.Errorf("tags[%d] must be non-empty and trimmed", index)
+		}
+		if len(tag) > maxSkillTagBytes {
+			return fmt.Errorf("tags[%d] exceeds %d bytes", index, maxSkillTagBytes)
+		}
+		if _, duplicate := seenTags[tag]; duplicate {
+			return fmt.Errorf("duplicate tag %q", tag)
+		}
+		seenTags[tag] = struct{}{}
+	}
+
+	if !utf8.ValidString(document.MarkdownBody) {
+		return errors.New("markdownBody must contain valid UTF-8")
+	}
+	if strings.ContainsRune(document.MarkdownBody, 0) {
+		return errors.New("markdownBody contains a NUL byte")
+	}
+	return nil
 }
 
 func splitSkillDocumentFrontmatter(
@@ -642,81 +717,6 @@ func parseSkillDocumentTags(raw any) (tags, tagWarnings []string) {
 	}
 
 	return output, warnings
-}
-
-func ValidateSkillDocument(document SkillDocument) error {
-	if err := validateSkillDocumentName(document.Name); err != nil {
-		return err
-	}
-	if err := validateSkillDocumentDescription(document.Description); err != nil {
-		return err
-	}
-	if document.DisplayName != "" {
-		if strings.TrimSpace(document.DisplayName) != document.DisplayName {
-			return errors.New("displayName has leading or trailing whitespace")
-		}
-		if len(document.DisplayName) > maxSkillDisplayNameBytes {
-			return fmt.Errorf(
-				"displayName exceeds %d bytes",
-				maxSkillDisplayNameBytes,
-			)
-		}
-	}
-	if _, ok := NormalizeSkillInsert(document.Insert); !ok {
-		return fmt.Errorf("unsupported insert value %q", document.Insert)
-	}
-	if len(document.Arguments) > maxSkillArguments {
-		return fmt.Errorf(
-			"arguments exceeds %d entries",
-			maxSkillArguments,
-		)
-	}
-
-	seenArguments := make(map[string]struct{}, len(document.Arguments))
-	for index, argument := range document.Arguments {
-		if argument.Name != strings.TrimSpace(argument.Name) ||
-			!isValidSkillArgumentName(argument.Name) {
-			return fmt.Errorf("arguments[%d].name is invalid", index)
-		}
-		if _, duplicate := seenArguments[argument.Name]; duplicate {
-			return fmt.Errorf("duplicate argument %q", argument.Name)
-		}
-		seenArguments[argument.Name] = struct{}{}
-
-		if len(argument.Description) > maxSkillArgumentBytes ||
-			len(argument.Default) > maxSkillArgumentBytes {
-			return fmt.Errorf(
-				"arguments[%d] description or default exceeds %d bytes",
-				index,
-				maxSkillArgumentBytes,
-			)
-		}
-	}
-
-	if len(document.Tags) > maxSkillTags {
-		return fmt.Errorf("tags exceeds %d entries", maxSkillTags)
-	}
-	seenTags := make(map[string]struct{}, len(document.Tags))
-	for index, tag := range document.Tags {
-		if tag == "" || tag != strings.TrimSpace(tag) {
-			return fmt.Errorf("tags[%d] must be non-empty and trimmed", index)
-		}
-		if len(tag) > maxSkillTagBytes {
-			return fmt.Errorf("tags[%d] exceeds %d bytes", index, maxSkillTagBytes)
-		}
-		if _, duplicate := seenTags[tag]; duplicate {
-			return fmt.Errorf("duplicate tag %q", tag)
-		}
-		seenTags[tag] = struct{}{}
-	}
-
-	if !utf8.ValidString(document.MarkdownBody) {
-		return errors.New("markdownBody must contain valid UTF-8")
-	}
-	if strings.ContainsRune(document.MarkdownBody, 0) {
-		return errors.New("markdownBody contains a NUL byte")
-	}
-	return nil
 }
 
 func validateSkillDocumentName(value string) error {

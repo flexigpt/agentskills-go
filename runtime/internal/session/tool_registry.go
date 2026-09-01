@@ -166,7 +166,7 @@ func (s *Session) toolUnload(ctx context.Context, args spec.UnloadArgs) (spec.Un
 
 func (s *Session) toolRead(
 	ctx context.Context,
-	args provider.ReadResourceArgs,
+	args spec.ReadResourceArgs,
 ) ([]llmtoolsgoSpec.ToolOutputUnion, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -211,7 +211,7 @@ func (s *Session) toolRead(
 	return p.ReadResource(ctx, k, args.ResourceLocation, enc)
 }
 
-func (s *Session) toolRunScript(ctx context.Context, args provider.RunScriptArgs) (provider.RunScriptOut, error) {
+func (s *Session) toolRunScript(ctx context.Context, args spec.RunScriptArgs) (provider.RunScriptOut, error) {
 	if err := ctx.Err(); err != nil {
 		return provider.RunScriptOut{}, err
 	}
