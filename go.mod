@@ -3,7 +3,7 @@ module github.com/flexigpt/agentskills-go
 go 1.26
 
 require (
-	github.com/flexigpt/llmtools-go v0.24.0
+	github.com/flexigpt/llmtools-go v0.24.1
 	github.com/goccy/go-yaml v1.19.2
 	github.com/google/uuid v1.6.0
 )
@@ -35,7 +35,7 @@ require (
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
 	github.com/kevinburke/ssh_config v1.2.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
-	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 // indirect
+	github.com/ledongthuc/pdf v0.0.0-20260903153007-b3c860c23753 // indirect
 	github.com/markusmobius/go-dateparser v1.2.3 // indirect
 	github.com/markusmobius/go-domdistiller v0.0.0-20240926050704-25b8d046ffb4 // indirect
 	github.com/markusmobius/go-htmldate v1.9.1 // indirect
