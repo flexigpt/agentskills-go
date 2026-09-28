@@ -3,7 +3,7 @@ module github.com/flexigpt/agentskills-go
 go 1.26.0
 
 require (
-	github.com/flexigpt/llmtools-go v0.24.2
+	github.com/flexigpt/llmtools-go v0.24.3
 	github.com/goccy/go-yaml v1.19.2
 	github.com/google/uuid v1.6.0
 )
