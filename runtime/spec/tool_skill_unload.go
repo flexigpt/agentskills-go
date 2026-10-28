@@ -37,6 +37,26 @@ func SkillsUnloadTool() llmtoolsgoSpec.Tool {
 },
 "additionalProperties":false
 }`),
+		OutputSchema: llmtoolsgoSpec.JSONSchema(`{
+"$schema":"http://json-schema.org/draft-07/schema#",
+"type":"object",
+"properties":{
+	"activeSkills":{
+		"type":"array",
+		"items":{
+			"type":"object",
+			"properties":{
+				"name":{"type":"string"},
+				"location":{"type":"string"}
+			},
+			"required":["name","location"],
+			"additionalProperties":false
+		}
+	}
+},
+"required":["activeSkills"],
+"additionalProperties":false
+}`),
 		GoImpl:     llmtoolsgoSpec.GoToolImpl{FuncID: FuncIDSkillsUnload},
 		CreatedAt:  llmtoolsgoSpec.SchemaStartTime,
 		ModifiedAt: llmtoolsgoSpec.SchemaStartTime,

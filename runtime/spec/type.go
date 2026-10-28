@@ -22,7 +22,8 @@ const (
 Rules:
 1) Only use skills that are listed in the provided skills prompt.
 2) Prefer reading advertised skill resource locations with skills-readresource before running scripts.
-3) After calling skills-load or skills-unload, rely on the updated skills context in subsequent turns.`
+3) After calling skills-load or skills-unload, rely on the updated skills context in subsequent turns.
+4) skills-readresource and skills-runscript only accept locations inside the selected active skill directory.`
 
 	skillsToolsBase = `You have access to "skills" tools:
 - skills-load
@@ -145,7 +146,8 @@ type ReadResourceArgs struct {
 	SkillName     string `json:"skillName"`
 	SkillLocation string `json:"skillLocation"`
 
-	// ResourceLocation is provider-defined; for fs providers this is typically a relative file path.
+	// ResourceLocation is provider-defined. For fs providers it must resolve
+	// inside the selected active skill directory.
 	ResourceLocation string `json:"resourceLocation"`
 
 	Encoding provider.ReadResourceEncoding `json:"encoding,omitempty"` // default: text
@@ -155,12 +157,14 @@ type RunScriptArgs struct {
 	SkillName     string `json:"skillName"`
 	SkillLocation string `json:"skillLocation"`
 
-	// ScriptLocation is provider-defined; for fs providers this is typically a relative script file path.
+	// ScriptLocation is provider-defined. For fs providers it must resolve
+	// inside the selected active skill directory.
 	ScriptLocation string `json:"scriptLocation"`
 
 	Args []string          `json:"args,omitempty"`
 	Env  map[string]string `json:"env,omitempty"`
 
-	// WorkDir is provider-defined; for fs providers this is typically a relative directory under the skill base.
+	// WorkDir is provider-defined. For fs providers it must resolve inside the
+	// selected active skill directory.
 	WorkDir string `json:"workDir,omitempty"`
 }

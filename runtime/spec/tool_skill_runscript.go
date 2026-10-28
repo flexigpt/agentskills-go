@@ -11,8 +11,9 @@ func SkillsRunScriptTool() llmtoolsgoSpec.Tool {
 		Slug:          "skills-runscript",
 		Version:       toolVersionOne,
 		DisplayName:   "Skills Run Script",
-		Description:   "execute a script from within the selected active skill",
-		Tags:          []string{toolTagSkills, "exec"},
+		Description: "Execute a script file inside the selected active skill directory. " +
+			"For filesystem-backed skills, scriptLocation and workDir must resolve under that directory.",
+		Tags: []string{toolTagSkills, "exec"},
 		ArgSchema: llmtoolsgoSpec.JSONSchema(`{
 "$schema":"http://json-schema.org/draft-07/schema#",
 "type":"object",
@@ -25,6 +26,20 @@ func SkillsRunScriptTool() llmtoolsgoSpec.Tool {
 	"workDir":{"type":"string","description":"working directory location for the script; typically relative to skillLocation"}
 },
 "required":["skillName","skillLocation","scriptLocation"],
+"additionalProperties":false
+}`),
+		OutputSchema: llmtoolsgoSpec.JSONSchema(`{
+"$schema":"http://json-schema.org/draft-07/schema#",
+"type":"object",
+"properties":{
+	"location":{"type":"string"},
+	"exitCode":{"type":"integer"},
+	"stdout":{"type":"string"},
+	"stderr":{"type":"string"},
+	"timedOut":{"type":"boolean"},
+	"durationMS":{"type":"integer"}
+},
+"required":["location","exitCode"],
 "additionalProperties":false
 }`),
 		GoImpl:     llmtoolsgoSpec.GoToolImpl{FuncID: FuncIDSkillsRunScript},

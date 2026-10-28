@@ -11,8 +11,9 @@ func SkillsReadResourceTool() llmtoolsgoSpec.Tool {
 		Slug:          "skills-readresource",
 		Version:       toolVersionOne,
 		DisplayName:   "Skills Read Resource",
-		Description:   "read a skill-scoped resource relative to an active skill base location",
-		Tags:          []string{toolTagSkills},
+		Description: "Read a resource inside the selected active skill directory. " +
+			"For filesystem-backed skills, resources outside that directory cannot be read.",
+		Tags: []string{toolTagSkills},
 		ArgSchema: llmtoolsgoSpec.JSONSchema(`{
 "$schema":"http://json-schema.org/draft-07/schema#",
 "type":"object",
@@ -24,14 +25,15 @@ func SkillsReadResourceTool() llmtoolsgoSpec.Tool {
 		"type":"string",
 		"enum":["text","binary"],
 		"default":"text",
-		"description":"text: return as UTF-8 text; binary: return binary as a base64-encoded string"
+		"description":"text: return UTF-8 text; binary: return a base64 file or image output"
 	}
 },
 "required":["skillName","skillLocation","resourceLocation"],
 "additionalProperties":false
 }`),
-		GoImpl:     llmtoolsgoSpec.GoToolImpl{FuncID: FuncIDSkillsReadResource},
-		CreatedAt:  llmtoolsgoSpec.SchemaStartTime,
-		ModifiedAt: llmtoolsgoSpec.SchemaStartTime,
+		OutputSchema: llmtoolsgoSpec.ToolOutputUnionListSchema(),
+		GoImpl:       llmtoolsgoSpec.GoToolImpl{FuncID: FuncIDSkillsReadResource},
+		CreatedAt:    llmtoolsgoSpec.SchemaStartTime,
+		ModifiedAt:   llmtoolsgoSpec.SchemaStartTime,
 	}
 }

@@ -122,8 +122,10 @@ type SkillProvider interface {
 	// LoadBody returns the prompt-injectable SKILL.md body (frontmatter removed).
 	LoadBody(ctx context.Context, key ProviderSkillKey) (string, error)
 
-	// ReadResource reads a resource relative to the skill base location.
-	// The meaning/format of resourceLocation is provider-defined (for fs it's typically a relative file path).
+	// ReadResource reads a resource scoped to the skill identified by key.
+	//
+	// The meaning and format of resourceLocation is provider-defined. The fs
+	// provider accepts only resources that resolve within the skill directory.
 	ReadResource(
 		ctx context.Context,
 		key ProviderSkillKey,
@@ -132,7 +134,10 @@ type SkillProvider interface {
 	) ([]llmtoolsgoSpec.ToolOutputUnion, error)
 
 	// RunScript executes a provider-scoped script identified by scriptLocation.
-	// Providers define/enforce constraints (e.g. must be under scripts/).
+	//
+	// Providers define and enforce location constraints. The fs provider accepts
+	// only script paths and work directories that resolve within the skill
+	// directory. This interface does not imply an OS-level process sandbox.
 	RunScript(
 		ctx context.Context,
 		key ProviderSkillKey,
