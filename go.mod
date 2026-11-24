@@ -3,7 +3,7 @@ module github.com/flexigpt/agentskills-go
 go 1.26.0
 
 require (
-	github.com/flexigpt/llmtools-go v0.25.1
+	github.com/flexigpt/llmtools-go v0.25.2
 	github.com/goccy/go-yaml v1.19.2
 	github.com/google/uuid v1.6.0
 )
@@ -45,9 +45,9 @@ require (
 	github.com/wasilibs/wazero-helpers v0.0.0-20250123031827-cd30c44769bb // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	github.com/yosssi/gohtml v0.0.0-20201013000340-ee4748c638f4 // indirect
-	golang.org/x/crypto v0.58.0 // indirect
-	golang.org/x/net v0.62.0 // indirect
+	golang.org/x/crypto v0.59.0 // indirect
+	golang.org/x/net v0.63.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 )
